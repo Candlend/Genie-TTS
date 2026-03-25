@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional, Callable, Union, Dict, Any
 
 import uvicorn
@@ -24,6 +25,7 @@ class ServerRuntimeConfig:
     queue_maxsize: int = 0
     active_requests: int = 0
     waiting_requests: int = 0
+    condition: threading.Condition = field(default_factory=threading.Condition)
 
 
 _reference_audios: Dict[str, dict] = {}
@@ -143,20 +145,41 @@ async def _tracked_audio_stream_generator(queue: asyncio.Queue) -> AsyncIterator
 async def _acquire_tts_slot() -> None:
     if _server_runtime.scaling_mode != "single-process":
         return
-    if _server_runtime.active_requests >= _server_runtime.max_concurrency:
-        if _server_runtime.queue_maxsize and _server_runtime.waiting_requests >= _server_runtime.queue_maxsize:
-            raise HTTPException(status_code=429, detail="TTS queue is full.")
-        _server_runtime.waiting_requests += 1
+
+    while True:
+        should_wait = False
+        with _server_runtime.condition:
+            if _server_runtime.active_requests < _server_runtime.max_concurrency:
+                _server_runtime.active_requests += 1
+                return
+
+            if _server_runtime.queue_maxsize and _server_runtime.waiting_requests >= _server_runtime.queue_maxsize:
+                raise HTTPException(status_code=429, detail="TTS queue is full.")
+
+            _server_runtime.waiting_requests += 1
+            should_wait = True
+
         try:
-            raise HTTPException(status_code=429, detail="TTS queue is full.")
+            if should_wait:
+                await asyncio.to_thread(_wait_for_tts_slot)
         finally:
-            _server_runtime.waiting_requests -= 1
-    _server_runtime.active_requests += 1
+            with _server_runtime.condition:
+                if _server_runtime.waiting_requests > 0:
+                    _server_runtime.waiting_requests -= 1
+
+
+def _wait_for_tts_slot() -> None:
+    with _server_runtime.condition:
+        while _server_runtime.active_requests >= _server_runtime.max_concurrency:
+            _server_runtime.condition.wait()
 
 
 def _release_tts_slot() -> None:
-    if _server_runtime.scaling_mode == "single-process" and _server_runtime.active_requests > 0:
-        _server_runtime.active_requests -= 1
+    if _server_runtime.scaling_mode == "single-process":
+        with _server_runtime.condition:
+            if _server_runtime.active_requests > 0:
+                _server_runtime.active_requests -= 1
+            _server_runtime.condition.notify()
 
 
 @app.post("/tts")

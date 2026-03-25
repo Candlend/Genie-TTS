@@ -188,6 +188,28 @@ class TestRuntimeConfigAPI:
 
         assert exc_info.value.status_code == 429
     @pytest.mark.anyio("asyncio")
+    async def test_single_process_waits_when_queue_has_capacity(self):
+        Server._server_runtime.scaling_mode = "single-process"
+        Server._server_runtime.max_concurrency = 1
+        Server._server_runtime.queue_maxsize = 1
+        Server._server_runtime.active_requests = 1
+        Server._server_runtime.waiting_requests = 0
+
+        acquire_task = asyncio.create_task(Server._acquire_tts_slot())
+        await asyncio.sleep(0)
+
+        assert Server._server_runtime.waiting_requests == 1
+        assert acquire_task.done() is False
+
+        Server._release_tts_slot()
+        await asyncio.wait_for(acquire_task, timeout=1)
+
+        assert Server._server_runtime.active_requests == 1
+        assert Server._server_runtime.waiting_requests == 0
+        Server._release_tts_slot()
+        assert Server._server_runtime.active_requests == 0
+
+    @pytest.mark.anyio("asyncio")
     async def test_single_process_acquire_increments_active_requests(self):
         Server._server_runtime.scaling_mode = "single-process"
         Server._server_runtime.max_concurrency = 2
