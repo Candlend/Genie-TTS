@@ -50,7 +50,7 @@ _LANGUAGE_MAP: dict[str, str] = {
     "zh-yue": "Cantonese",
 
     # Hybrid modes
-    "hybrid": "Hybrid-Chinese-English",
+    "hybrid": "auto",
     "hybrid-zh-en": "Hybrid-Chinese-English",
     "hybrid-en-zh": "Hybrid-Chinese-English",
     "hybrid-chinese-english": "Hybrid-Chinese-English",
