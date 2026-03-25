@@ -23,12 +23,12 @@ onnxruntime.set_default_logger_severity(3)
 from pathlib import Path
 import json
 import asyncio
-from typing import AsyncIterator, Optional, Union, Dict
+from typing import AsyncIterator, Optional, Union, Dict, Any
 
 from .Audio.ReferenceAudio import ReferenceAudio
 from .Core.Resources import ensure_exists, Chinese_G2P_DIR, English_G2P_DIR
 from .Core.TTSPlayer import tts_player
-from .ModelManager import model_manager
+from .ModelManager import model_manager, RuntimeConfig
 from .Utils.Shared import context
 from .Utils.Language import normalize_language
 from .PredefinedCharacter import download_chara, CHARA_LANG, CHARA_ALIAS_MAP
@@ -95,6 +95,7 @@ def load_character(
         character_name: str,
         onnx_model_dir: Union[str, PathLike],
         language: str,
+        runtime_config: Optional[Dict[str, Any] | RuntimeConfig] = None,
 ) -> None:
     """
     Loads a character model from an ONNX model directory.
@@ -120,6 +121,7 @@ def load_character(
         character_name=character_name,
         model_dir=model_path,
         language=language,
+        runtime_config=runtime_config,
     )
 
 

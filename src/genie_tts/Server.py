@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import AsyncIterator, Optional, Callable, Union, Dict
+from typing import AsyncIterator, Optional, Callable, Union, Dict, Any
 import logging
 
 import uvicorn
@@ -26,6 +26,7 @@ class CharacterPayload(BaseModel):
     character_name: str
     onnx_model_dir: str
     language: str
+    runtime_config: Optional[Dict[str, Any]] = None
 
 
 class UnloadCharacterPayload(BaseModel):
@@ -53,6 +54,7 @@ def load_character_endpoint(payload: CharacterPayload):
             character_name=payload.character_name,
             model_dir=payload.onnx_model_dir,
             language=normalize_language(payload.language),
+            runtime_config=payload.runtime_config,
         )
         return {"status": "success", "message": f"Character '{payload.character_name}' loaded."}
     except Exception as e:
@@ -161,7 +163,14 @@ def clear_reference_audio_cache_endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def start_server(host: str = "127.0.0.1", port: int = 8000, workers: int = 1):
+def start_server(
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        workers: int = 1,
+        scaling_mode: str = "process",
+):
+    if scaling_mode == "single-process" and workers > 1:
+        raise ValueError("single-process mode requires workers=1")
     uvicorn.run(app, host=host, port=port, workers=workers)
 
 

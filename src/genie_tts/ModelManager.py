@@ -7,8 +7,8 @@
 import gc
 import logging
 import os
-from dataclasses import dataclass
-from typing import Optional, List, Dict
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 
 import numpy as np
 import onnx
@@ -43,6 +43,16 @@ class GSVModelFile:
 
     ROBERTA_MODEL = os.path.join(ROBERTA_MODEL_DIR, 'RoBERTa.onnx')
     ROBERTA_TOKENIZER = os.path.join(ROBERTA_MODEL_DIR, 'roberta_tokenizer')
+
+
+@dataclass
+class RuntimeConfig:
+    providers: List[str] = field(default_factory=lambda: ["CPUExecutionProvider"])
+    provider_options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    intra_op_num_threads: Optional[int] = None
+    inter_op_num_threads: Optional[int] = None
+    execution_mode: Optional[str] = None
+    graph_optimization_level: Optional[str] = "ORT_ENABLE_ALL"
 
 
 @dataclass
@@ -122,12 +132,27 @@ class ModelManager:
         )
         self.character_to_language: Dict[str, str] = {}
         self.character_model_paths: Dict[str, str] = {}
-        self.providers = ["CPUExecutionProvider"]
+        self.runtime_config = RuntimeConfig()
 
         self.cn_hubert: Optional[InferenceSession] = None
         self.speaker_verification_model: Optional[InferenceSession] = None
         self.roberta_model: Optional[InferenceSession] = None
         self.roberta_tokenizer: Optional[Tokenizer] = None
+
+    @staticmethod
+    def normalize_runtime_config(runtime_config: Optional[Dict[str, Any] | RuntimeConfig]) -> RuntimeConfig:
+        if runtime_config is None:
+            return RuntimeConfig()
+        if isinstance(runtime_config, RuntimeConfig):
+            return runtime_config
+        return RuntimeConfig(
+            providers=list(runtime_config.get("providers", ["CPUExecutionProvider"])),
+            provider_options=dict(runtime_config.get("provider_options", {})),
+            intra_op_num_threads=runtime_config.get("intra_op_num_threads"),
+            inter_op_num_threads=runtime_config.get("inter_op_num_threads"),
+            execution_mode=runtime_config.get("execution_mode"),
+            graph_optimization_level=runtime_config.get("graph_optimization_level", "ORT_ENABLE_ALL"),
+        )
 
     def load_roberta_model(self, model_path: str = GSVModelFile.ROBERTA_MODEL) -> bool:
         if self.roberta_model is not None:
@@ -233,11 +258,13 @@ class ModelManager:
             character_name: str,
             model_dir: str,
             language: str,
+            runtime_config: Optional[Dict[str, Any] | RuntimeConfig] = None,
     ) -> bool:
         """
         加载角色模型，如果需要，在内存中动态转换 FP16 权重。
         """
         character_name = character_name.lower()
+        runtime = self.normalize_runtime_config(runtime_config)
         if character_name in self.character_to_model:
             _ = self.character_to_model[character_name]
             return True
@@ -269,6 +296,10 @@ class ModelManager:
                 # 设置 Session Options
                 sess_options = onnxruntime.SessionOptions()
                 sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+                if runtime.intra_op_num_threads is not None:
+                    sess_options.intra_op_num_threads = runtime.intra_op_num_threads
+                if runtime.inter_op_num_threads is not None:
+                    sess_options.inter_op_num_threads = runtime.inter_op_num_threads
 
                 if os.path.exists(model_path):
                     fp16_bin_name = onnx_to_fp16_map.get(model_file)
@@ -276,12 +307,12 @@ class ModelManager:
 
                     if fp16_bin_path and os.path.exists(fp16_bin_path):
                         model_dict[model_file] = load_session_with_fp16_conversion(
-                            model_path, fp16_bin_path, self.providers, sess_options
+                            model_path, fp16_bin_path, runtime.providers, sess_options
                         )
                     else:
                         model_dict[model_file] = onnxruntime.InferenceSession(
                             model_path,
-                            providers=self.providers,
+                            providers=runtime.providers,
                             sess_options=sess_options,
                         )
                 elif model_file == GSVModelFile.PROMPT_ENCODER:
