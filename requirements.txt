@@ -30,3 +30,4 @@ jamo
 ko_pron
 g2pk2
 eunjeon
+fast_langdetect
