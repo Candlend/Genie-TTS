@@ -124,6 +124,14 @@ genie.load_character(
     character_name='<CHARACTER_NAME>',  # 替换为您的角色名称
     onnx_model_dir=r"<PATH_TO_CHARACTER_ONNX_MODEL_DIR>",  # 包含 ONNX 模型的文件夹
     language='<LANGUAGE_CODE>',  # 替换为语言代码，例如 'en', 'zh', 'jp'
+    runtime_config={
+        "providers": ["CPUExecutionProvider"],
+        "intra_op_num_threads": 4,
+        "inter_op_num_threads": 2,
+        # CUDA 构建示例：
+        # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
+    },
 )
 
 # 第二步：设置参考音频（用于情感和语调克隆）
@@ -183,9 +191,26 @@ import genie_tts as genie
 genie.start_server(
     host="0.0.0.0",  # 主机地址
     port=8000,  # 端口
-    workers=1  # 工作进程数
+    workers=4,  # 基于多进程扩展的工作进程数
 )
+
+# 单进程 + 有界排队模式
+# genie.start_server(
+#     host="0.0.0.0",
+#     port=8000,
+#     workers=1,
+#     scaling_mode="single-process",
+#     max_concurrency=1,
+#     queue_maxsize=8,
+# )
 ```
+
+`start_server()` 现在支持两种部署模式：
+
+- `scaling_mode="process"`（默认）：使用多个 worker 进程扩展吞吐。这是更安全的方式，
+  但每个进程都会保留自己的模型缓存和参考音频缓存。
+- `scaling_mode="single-process"`：保持 `workers=1`，并启用进程内有界请求控制。
+  通过 `max_concurrency` 和 `queue_maxsize` 限制同时运行和排队的请求数量。
 
 > 关于请求格式和 API 详情，请参阅我们的 [API 服务教程](./Tutorial/English/API%20Server%20Tutorial.py)。
 

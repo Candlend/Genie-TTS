@@ -129,6 +129,14 @@ genie.load_character(
     character_name='<CHARACTER_NAME>',  # Replace with your character name
     onnx_model_dir=r"<PATH_TO_CHARACTER_ONNX_MODEL_DIR>",  # Folder containing ONNX model
     language='<LANGUAGE_CODE>',  # Replace with language code, e.g., 'en', 'zh', 'jp'
+    runtime_config={
+        "providers": ["CPUExecutionProvider"],
+        "intra_op_num_threads": 4,
+        "inter_op_num_threads": 2,
+        # Example for CUDA-enabled builds:
+        # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
+    },
 )
 
 # Step 2: Set reference audio (for emotion and intonation cloning)
@@ -188,9 +196,26 @@ import genie_tts as genie
 genie.start_server(
     host="0.0.0.0",  # Host address
     port=8000,  # Port
-    workers=1  # Number of workers
+    workers=4,  # Number of workers for process-based scaling
 )
+
+# Single-process mode with bounded queueing
+# genie.start_server(
+#     host="0.0.0.0",
+#     port=8000,
+#     workers=1,
+#     scaling_mode="single-process",
+#     max_concurrency=1,
+#     queue_maxsize=8,
+# )
 ```
+
+`start_server()` now supports two deployment modes:
+
+- `scaling_mode="process"` (default): scale with multiple worker processes. This is the safest option
+  for higher throughput, but each process keeps its own model and reference-audio cache.
+- `scaling_mode="single-process"`: keep `workers=1` and use bounded in-process request accounting.
+  Use `max_concurrency` and `queue_maxsize` to limit how many requests can run or wait at once.
 
 > For request formats and API details, see our [API Server Tutorial](./Tutorial/English/API%20Server%20Tutorial.py).
 
