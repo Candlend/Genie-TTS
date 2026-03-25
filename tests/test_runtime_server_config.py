@@ -180,6 +180,43 @@ class TestRuntimeConfigAPI:
 
 
 class TestModelManagerRuntimeConfig:
+    def test_load_roberta_uses_runtime_config_provider_options(self, monkeypatch):
+        manager = ModelManager()
+        manager.runtime_config = ModelManager.normalize_runtime_config({
+            "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            "provider_options": {"CUDAExecutionProvider": {"device_id": "2"}},
+            "intra_op_num_threads": 3,
+        })
+        created = {}
+
+        monkeypatch.setattr(os.path, "exists", lambda path: True)
+
+        class FakeGraphOptimizationLevel:
+            ORT_ENABLE_ALL = "ORT_ENABLE_ALL"
+
+        class FakeSessionOptions:
+            def __init__(self):
+                self.graph_optimization_level = None
+                self.intra_op_num_threads = None
+                self.inter_op_num_threads = None
+
+        monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.SessionOptions", FakeSessionOptions)
+        monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.GraphOptimizationLevel", FakeGraphOptimizationLevel)
+        monkeypatch.setattr("genie_tts.ModelManager.Tokenizer.from_file", lambda path: object())
+
+        def fake_inference_session(model_path, providers=None, provider_options=None, sess_options=None):
+            created["providers"] = providers
+            created["provider_options"] = provider_options
+            created["sess_options"] = sess_options
+            return object()
+
+        monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.InferenceSession", fake_inference_session)
+
+        assert manager.load_roberta_model("/tmp/roberta.onnx") is True
+        assert created["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        assert created["provider_options"] == {"CUDAExecutionProvider": {"device_id": "2"}}
+        assert created["sess_options"].intra_op_num_threads == 3
+
     def test_normalize_runtime_config_preserves_provider_options(self):
         runtime = ModelManager.normalize_runtime_config({
             "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],

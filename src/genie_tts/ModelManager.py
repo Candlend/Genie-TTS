@@ -187,9 +187,12 @@ class ModelManager:
             # logger.warning(f'RoBERTa model does not exist: {model_path}. BERT features will not be used.')
             return False
         try:
+            session_config = self._build_session_create_config(self.runtime_config)
             self.roberta_model = onnxruntime.InferenceSession(
                 model_path,
-                providers=self.providers,
+                providers=session_config.providers,
+                provider_options=session_config.provider_options,
+                sess_options=session_config.sess_options,
             )
             self.roberta_tokenizer = Tokenizer.from_file(
                 os.path.join(GSVModelFile.ROBERTA_TOKENIZER, 'tokenizer.json')
@@ -207,9 +210,12 @@ class ModelManager:
         if self.speaker_verification_model is not None:
             return True
         try:
+            session_config = self._build_session_create_config(self.runtime_config)
             self.speaker_verification_model = onnxruntime.InferenceSession(
                 model_path,
-                providers=self.providers,
+                providers=session_config.providers,
+                provider_options=session_config.provider_options,
+                sess_options=session_config.sess_options,
             )
             logger.info(f"Successfully loaded Speaker Verification model.")
             return True
@@ -224,17 +230,22 @@ class ModelManager:
         if self.cn_hubert is not None:
             return True
         try:
+            session_config = self._build_session_create_config(self.runtime_config)
             # Hubert 也应用内存转换逻辑
             if model_path == GSVModelFile.HUBERT_MODEL and os.path.exists(GSVModelFile.HUBERT_MODEL_WEIGHT_FP16):
                 self.cn_hubert = load_session_with_fp16_conversion(
                     model_path,
                     GSVModelFile.HUBERT_MODEL_WEIGHT_FP16,
-                    self.providers
+                    session_config.providers,
+                    session_config.sess_options,
+                    session_config.provider_options,
                 )
             else:
                 self.cn_hubert = onnxruntime.InferenceSession(
                     model_path,
-                    providers=self.providers,
+                    providers=session_config.providers,
+                    provider_options=session_config.provider_options,
+                    sess_options=session_config.sess_options,
                 )
             logger.info("Successfully loaded CN_HuBERT model.")
             return True
