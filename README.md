@@ -26,8 +26,8 @@ project [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS). It integrates TTS 
 server, and other core features, aiming to provide ultimate performance and convenience.
 
 * **✅ Supported Model Version:** GPT-SoVITS V2, V2ProPlus
-* **✅ Supported Language:** Japanese, English, Chinese, Korean
-* **✅ Supported Python Version:** >= 3.9
+* **✅ Supported Language:** Japanese, English, Chinese, Korean, Auto-detect (`language="auto"`)
+* **✅ Supported Python Version:** >= 3.10
 
 ---
 
