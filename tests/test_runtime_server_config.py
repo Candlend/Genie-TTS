@@ -1,8 +1,15 @@
+import asyncio
 import os
+from types import SimpleNamespace
 import pytest
 
 from genie_tts import Internal, Server
 from genie_tts.ModelManager import ModelManager
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
 class TestRuntimeConfigAPI:
@@ -24,10 +31,11 @@ class TestRuntimeConfigAPI:
         monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.SessionOptions", FakeSessionOptions)
         monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.GraphOptimizationLevel", FakeGraphOptimizationLevel)
 
-        def fake_inference_session(model_path, providers=None, sess_options=None):
+        def fake_inference_session(model_path, providers=None, provider_options=None, sess_options=None):
             created.append({
                 "model_path": model_path,
                 "providers": providers,
+                "provider_options": provider_options,
                 "sess_options": sess_options,
             })
             return object()
@@ -40,6 +48,7 @@ class TestRuntimeConfigAPI:
             language="English",
             runtime_config={
                 "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+                "provider_options": {"CUDAExecutionProvider": {"device_id": "1"}},
                 "intra_op_num_threads": 4,
                 "inter_op_num_threads": 2,
             },
@@ -48,6 +57,7 @@ class TestRuntimeConfigAPI:
         assert ok is True
         assert created
         assert all(item["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"] for item in created)
+        assert all(item["provider_options"] == {"CUDAExecutionProvider": {"device_id": "1"}} for item in created)
         assert all(item["sess_options"].intra_op_num_threads == 4 for item in created)
         assert all(item["sess_options"].inter_op_num_threads == 2 for item in created)
 
@@ -96,6 +106,30 @@ class TestRuntimeConfigAPI:
         assert captured["port"] == 8000
         assert captured["workers"] == 2
 
+    def test_start_server_passes_single_process_options_through(self, monkeypatch):
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(Server.uvicorn, "run", fake_run)
+
+        Server.start_server(
+            host="127.0.0.1",
+            port=9000,
+            workers=1,
+            scaling_mode="single-process",
+            max_concurrency=3,
+            queue_maxsize=9,
+        )
+
+        assert captured["host"] == "127.0.0.1"
+        assert captured["port"] == 9000
+        assert captured["workers"] == 1
+        assert Server._server_runtime.max_concurrency == 3
+        assert Server._server_runtime.queue_maxsize == 9
+        assert Server._server_runtime.scaling_mode == "single-process"
+
     def test_start_server_rejects_multi_worker_single_process_mode(self, monkeypatch):
         monkeypatch.setattr(Server.uvicorn, "run", lambda *args, **kwargs: None)
 
@@ -106,6 +140,43 @@ class TestRuntimeConfigAPI:
                 workers=2,
                 scaling_mode="single-process",
             )
+
+    @pytest.mark.anyio("asyncio")
+    async def test_single_process_queue_limit_rejects_when_full(self, monkeypatch):
+        class FakeHTTPException(Exception):
+            def __init__(self, status_code, detail):
+                super().__init__(detail)
+                self.status_code = status_code
+                self.detail = detail
+
+        monkeypatch.setattr(Server, "HTTPException", FakeHTTPException)
+        Server._server_runtime.scaling_mode = "single-process"
+        Server._server_runtime.max_concurrency = 1
+        Server._server_runtime.queue_maxsize = 1
+        Server._server_runtime.active_requests = 1
+        Server._server_runtime.waiting_requests = 1
+
+        with pytest.raises(FakeHTTPException) as exc_info:
+            await Server._acquire_tts_slot()
+
+        assert exc_info.value.status_code == 429
+    @pytest.mark.anyio("asyncio")
+    async def test_tracked_audio_stream_releases_single_process_slot_on_finish(self):
+        Server._server_runtime.scaling_mode = "single-process"
+        Server._server_runtime.max_concurrency = 1
+        Server._server_runtime.queue_maxsize = 0
+        Server._server_runtime.active_requests = 1
+        Server._server_runtime.waiting_requests = 0
+
+        queue = asyncio.Queue()
+        await queue.put(None)
+
+        chunks = []
+        async for chunk in Server._tracked_audio_stream_generator(queue):
+            chunks.append(chunk)
+
+        assert chunks == []
+        assert Server._server_runtime.active_requests == 0
 
 
 class TestModelManagerRuntimeConfig:

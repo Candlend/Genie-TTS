@@ -1,7 +1,8 @@
 import asyncio
-import os
-from typing import AsyncIterator, Optional, Callable, Union, Dict, Any
 import logging
+import os
+from dataclasses import dataclass
+from typing import AsyncIterator, Optional, Callable, Union, Dict, Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -16,8 +17,18 @@ from .Utils.Language import normalize_language
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class ServerRuntimeConfig:
+    scaling_mode: str = "process"
+    max_concurrency: int = 1
+    queue_maxsize: int = 0
+    active_requests: int = 0
+    waiting_requests: int = 0
+
+
 _reference_audios: Dict[str, dict] = {}
 SUPPORTED_AUDIO_EXTS = {'.wav', '.flac', '.ogg', '.aiff', '.aif'}
+_server_runtime = ServerRuntimeConfig()
 
 app = FastAPI()
 
@@ -121,28 +132,60 @@ async def audio_stream_generator(queue: asyncio.Queue) -> AsyncIterator[bytes]:
         yield chunk
 
 
+async def _tracked_audio_stream_generator(queue: asyncio.Queue) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in audio_stream_generator(queue):
+            yield chunk
+    finally:
+        _release_tts_slot()
+
+
+async def _acquire_tts_slot() -> None:
+    if _server_runtime.scaling_mode != "single-process":
+        return
+    if _server_runtime.active_requests >= _server_runtime.max_concurrency:
+        if _server_runtime.queue_maxsize and _server_runtime.waiting_requests >= _server_runtime.queue_maxsize:
+            raise HTTPException(status_code=429, detail="TTS queue is full.")
+        _server_runtime.waiting_requests += 1
+        try:
+            raise HTTPException(status_code=429, detail="TTS queue is full.")
+        finally:
+            _server_runtime.waiting_requests -= 1
+    _server_runtime.active_requests += 1
+
+
+def _release_tts_slot() -> None:
+    if _server_runtime.scaling_mode == "single-process" and _server_runtime.active_requests > 0:
+        _server_runtime.active_requests -= 1
+
+
 @app.post("/tts")
 async def tts_endpoint(payload: TTSPayload):
-    if payload.character_name not in _reference_audios:
-        raise HTTPException(status_code=404, detail="Character not found or reference audio not set.")
+    await _acquire_tts_slot()
+    try:
+        if payload.character_name not in _reference_audios:
+            raise HTTPException(status_code=404, detail="Character not found or reference audio not set.")
 
-    loop = asyncio.get_running_loop()
-    stream_queue: asyncio.Queue[Union[bytes, None]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        stream_queue: asyncio.Queue[Union[bytes, None]] = asyncio.Queue()
 
-    def tts_chunk_callback(chunk: Optional[bytes]):
-        loop.call_soon_threadsafe(stream_queue.put_nowait, chunk)
+        def tts_chunk_callback(chunk: Optional[bytes]):
+            loop.call_soon_threadsafe(stream_queue.put_nowait, chunk)
 
-    loop.run_in_executor(
-        None,
-        run_tts_in_background,
-        payload.character_name,
-        payload.text,
-        payload.split_sentence,
-        payload.save_path,
-        tts_chunk_callback
-    )
+        loop.run_in_executor(
+            None,
+            run_tts_in_background,
+            payload.character_name,
+            payload.text,
+            payload.split_sentence,
+            payload.save_path,
+            tts_chunk_callback
+        )
 
-    return StreamingResponse(audio_stream_generator(stream_queue), media_type="audio/wav")
+        return StreamingResponse(_tracked_audio_stream_generator(stream_queue), media_type="audio/wav")
+    except Exception:
+        _release_tts_slot()
+        raise
 
 
 @app.post("/stop")
@@ -168,9 +211,14 @@ def start_server(
         port: int = 8000,
         workers: int = 1,
         scaling_mode: str = "process",
+        max_concurrency: int = 1,
+        queue_maxsize: int = 0,
 ):
     if scaling_mode == "single-process" and workers > 1:
         raise ValueError("single-process mode requires workers=1")
+    _server_runtime.scaling_mode = scaling_mode
+    _server_runtime.max_concurrency = max_concurrency
+    _server_runtime.queue_maxsize = queue_maxsize
     uvicorn.run(app, host=host, port=port, workers=workers)
 
 

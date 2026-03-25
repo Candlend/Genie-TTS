@@ -56,6 +56,13 @@ class RuntimeConfig:
 
 
 @dataclass
+class SessionCreateConfig:
+    providers: List[str]
+    provider_options: Optional[Dict[str, Dict[str, Any]]]
+    sess_options: onnxruntime.SessionOptions
+
+
+@dataclass
 class GSVModel:
     LANGUAGE: str
     T2S_ENCODER: InferenceSession
@@ -70,7 +77,8 @@ def load_session_with_fp16_conversion(
         onnx_path: str,
         fp16_bin_path: str,
         providers: List[str],
-        sess_options: Optional[onnxruntime.SessionOptions] = None
+        sess_options: Optional[onnxruntime.SessionOptions] = None,
+        provider_options: Optional[List[Dict[str, Any]]] = None,
 ) -> InferenceSession:
     """
     通用函数：读取 ONNX 和 FP16 权重文件，在内存中将权重转换为 FP32，
@@ -116,6 +124,7 @@ def load_session_with_fp16_conversion(
         session = InferenceSession(
             model_proto.SerializeToString(),
             providers=providers,
+            provider_options=provider_options,
             sess_options=sess_options
         )
         return session
@@ -152,6 +161,23 @@ class ModelManager:
             inter_op_num_threads=runtime_config.get("inter_op_num_threads"),
             execution_mode=runtime_config.get("execution_mode"),
             graph_optimization_level=runtime_config.get("graph_optimization_level", "ORT_ENABLE_ALL"),
+        )
+
+    @staticmethod
+    def _build_session_create_config(runtime: RuntimeConfig) -> SessionCreateConfig:
+        sess_options = onnxruntime.SessionOptions()
+        sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+        if runtime.intra_op_num_threads is not None:
+            sess_options.intra_op_num_threads = runtime.intra_op_num_threads
+        if runtime.inter_op_num_threads is not None:
+            sess_options.inter_op_num_threads = runtime.inter_op_num_threads
+
+        provider_options = runtime.provider_options or None
+
+        return SessionCreateConfig(
+            providers=runtime.providers,
+            provider_options=provider_options,
+            sess_options=sess_options,
         )
 
     def load_roberta_model(self, model_path: str = GSVModelFile.ROBERTA_MODEL) -> bool:
@@ -290,16 +316,9 @@ class ModelManager:
         model_files_to_load.extend(fp32_decoders)
 
         try:
+            session_config = self._build_session_create_config(runtime)
             for model_file in model_files_to_load:
                 model_path = os.path.normpath(os.path.join(model_dir, model_file))
-
-                # 设置 Session Options
-                sess_options = onnxruntime.SessionOptions()
-                sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-                if runtime.intra_op_num_threads is not None:
-                    sess_options.intra_op_num_threads = runtime.intra_op_num_threads
-                if runtime.inter_op_num_threads is not None:
-                    sess_options.inter_op_num_threads = runtime.inter_op_num_threads
 
                 if os.path.exists(model_path):
                     fp16_bin_name = onnx_to_fp16_map.get(model_file)
@@ -307,13 +326,18 @@ class ModelManager:
 
                     if fp16_bin_path and os.path.exists(fp16_bin_path):
                         model_dict[model_file] = load_session_with_fp16_conversion(
-                            model_path, fp16_bin_path, runtime.providers, sess_options
+                            model_path,
+                            fp16_bin_path,
+                            session_config.providers,
+                            session_config.sess_options,
+                            session_config.provider_options,
                         )
                     else:
                         model_dict[model_file] = onnxruntime.InferenceSession(
                             model_path,
-                            providers=runtime.providers,
-                            sess_options=sess_options,
+                            providers=session_config.providers,
+                            provider_options=session_config.provider_options,
+                            sess_options=session_config.sess_options,
                         )
                 elif model_file == GSVModelFile.PROMPT_ENCODER:
                     model_dict[model_file] = None
