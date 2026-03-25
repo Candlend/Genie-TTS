@@ -11,6 +11,7 @@ from .Internal import (
     wait_for_playback_done,
 )
 from .Server import start_server
+from .ModelManager import RuntimeConfig
 from .Core.Resources import download_genie_data
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "convert_to_onnx",
     "clear_reference_audio_cache",
     "start_server",
+    "RuntimeConfig",
     "load_predefined_character",
     "wait_for_playback_done",
     'download_genie_data',

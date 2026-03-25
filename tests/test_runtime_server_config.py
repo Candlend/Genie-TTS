@@ -3,6 +3,7 @@ import os
 from types import SimpleNamespace
 import pytest
 
+import genie_tts
 from genie_tts import Internal, Server
 from genie_tts.ModelManager import ModelManager
 
@@ -13,6 +14,10 @@ def anyio_backend():
 
 
 class TestRuntimeConfigAPI:
+    def test_runtime_config_is_exported_from_package(self):
+        runtime = genie_tts.RuntimeConfig(intra_op_num_threads=2)
+        assert runtime.intra_op_num_threads == 2
+
     def test_model_manager_uses_runtime_config_providers(self, monkeypatch):
         manager = ModelManager()
         created = []
@@ -151,6 +156,17 @@ class TestRuntimeConfigAPI:
                 workers=2,
                 scaling_mode="single-process",
             )
+
+    @pytest.mark.anyio("asyncio")
+    async def test_process_mode_acquire_does_not_touch_counters(self):
+        Server._server_runtime.scaling_mode = "process"
+        Server._server_runtime.active_requests = 0
+        Server._server_runtime.waiting_requests = 0
+
+        await Server._acquire_tts_slot()
+
+        assert Server._server_runtime.active_requests == 0
+        assert Server._server_runtime.waiting_requests == 0
 
     @pytest.mark.anyio("asyncio")
     async def test_single_process_queue_limit_rejects_when_full(self, monkeypatch):
