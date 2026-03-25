@@ -27,4 +27,4 @@
 ## US-5: Docs and regression coverage
 
 - [x] T9: Add regression tests for runtime config plumbing and queue guards
-- [ ] T10: Update README / README_zh with runtime and scaling configuration examples
+- [x] T10: Update README / README_zh with runtime and scaling configuration examples

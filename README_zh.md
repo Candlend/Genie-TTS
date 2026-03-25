@@ -128,9 +128,11 @@ genie.load_character(
         "providers": ["CPUExecutionProvider"],
         "intra_op_num_threads": 4,
         "inter_op_num_threads": 2,
-        # CUDA 构建示例：
+        # CUDA 构建示例（Linux/Windows，需要 CUDA 版 onnxruntime）：
         # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
         # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
+        # Apple Silicon Mac（CoreML，走 GPU / 神经引擎）：
+        # "providers": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
     },
 )
 
