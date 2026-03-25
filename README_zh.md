@@ -126,8 +126,10 @@ genie.load_character(
     language='<LANGUAGE_CODE>',  # 替换为语言代码，例如 'en', 'zh', 'jp'
     runtime_config={
         "providers": ["CPUExecutionProvider"],
+        # Apple Silicon 10 核实测：4 线程约有 3x 加速；超过 4 线程后调度开销反而使性能下降。
+        # 建议设置为物理核心数的一半到全部之间，按实际机器调整。
         "intra_op_num_threads": 4,
-        "inter_op_num_threads": 2,
+        "inter_op_num_threads": 1,
         # CUDA 构建示例（Linux/Windows，需要 CUDA 版 onnxruntime）：
         # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
         # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},

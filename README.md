@@ -131,8 +131,11 @@ genie.load_character(
     language='<LANGUAGE_CODE>',  # Replace with language code, e.g., 'en', 'zh', 'jp'
     runtime_config={
         "providers": ["CPUExecutionProvider"],
+        # Optimal thread count on Apple Silicon (10-core): 4 threads gives ~3x speedup
+        # vs single-threaded; beyond 4 threads, scheduling overhead reduces gains.
+        # Tune this to your physical core count — typically floor(cores / 2) to cores.
         "intra_op_num_threads": 4,
-        "inter_op_num_threads": 2,
+        "inter_op_num_threads": 1,
         # Example for CUDA (Linux/Windows with CUDA-enabled onnxruntime):
         # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
         # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
