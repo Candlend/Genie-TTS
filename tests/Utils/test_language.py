@@ -52,7 +52,7 @@ class TestNormalizeLanguage:
 
     # --- Hybrid ---
     def test_hybrid(self):
-        assert normalize_language("hybrid") == "Hybrid-Chinese-English"
+        assert normalize_language("hybrid") == "auto"
 
     def test_hybrid_zh_en(self):
         assert normalize_language("hybrid-zh-en") == "Hybrid-Chinese-English"
