@@ -19,16 +19,23 @@ class TestRuntimeConfigAPI:
 
         monkeypatch.setattr(os.path, "exists", lambda path: path.endswith(".onnx"))
 
+        class FakeExecutionMode:
+            ORT_SEQUENTIAL = "ORT_SEQUENTIAL"
+            ORT_PARALLEL = "ORT_PARALLEL"
+
         class FakeGraphOptimizationLevel:
             ORT_ENABLE_ALL = "ORT_ENABLE_ALL"
+            ORT_DISABLE_ALL = "ORT_DISABLE_ALL"
 
         class FakeSessionOptions:
             def __init__(self):
                 self.graph_optimization_level = None
+                self.execution_mode = None
                 self.intra_op_num_threads = None
                 self.inter_op_num_threads = None
 
         monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.SessionOptions", FakeSessionOptions)
+        monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.ExecutionMode", FakeExecutionMode)
         monkeypatch.setattr("genie_tts.ModelManager.onnxruntime.GraphOptimizationLevel", FakeGraphOptimizationLevel)
 
         def fake_inference_session(model_path, providers=None, provider_options=None, sess_options=None):
@@ -49,6 +56,8 @@ class TestRuntimeConfigAPI:
             runtime_config={
                 "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
                 "provider_options": {"CUDAExecutionProvider": {"device_id": "1"}},
+                "execution_mode": "ORT_PARALLEL",
+                "graph_optimization_level": "ORT_DISABLE_ALL",
                 "intra_op_num_threads": 4,
                 "inter_op_num_threads": 2,
             },
@@ -58,6 +67,8 @@ class TestRuntimeConfigAPI:
         assert created
         assert all(item["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"] for item in created)
         assert all(item["provider_options"] == {"CUDAExecutionProvider": {"device_id": "1"}} for item in created)
+        assert all(item["sess_options"].execution_mode == "ORT_PARALLEL" for item in created)
+        assert all(item["sess_options"].graph_optimization_level == "ORT_DISABLE_ALL" for item in created)
         assert all(item["sess_options"].intra_op_num_threads == 4 for item in created)
         assert all(item["sess_options"].inter_op_num_threads == 2 for item in created)
 
@@ -160,6 +171,20 @@ class TestRuntimeConfigAPI:
             await Server._acquire_tts_slot()
 
         assert exc_info.value.status_code == 429
+    @pytest.mark.anyio("asyncio")
+    async def test_single_process_acquire_increments_active_requests(self):
+        Server._server_runtime.scaling_mode = "single-process"
+        Server._server_runtime.max_concurrency = 2
+        Server._server_runtime.queue_maxsize = 1
+        Server._server_runtime.active_requests = 0
+        Server._server_runtime.waiting_requests = 0
+
+        await Server._acquire_tts_slot()
+
+        assert Server._server_runtime.active_requests == 1
+        Server._release_tts_slot()
+        assert Server._server_runtime.active_requests == 0
+
     @pytest.mark.anyio("asyncio")
     async def test_tracked_audio_stream_releases_single_process_slot_on_finish(self):
         Server._server_runtime.scaling_mode = "single-process"

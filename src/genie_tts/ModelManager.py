@@ -78,7 +78,7 @@ def load_session_with_fp16_conversion(
         fp16_bin_path: str,
         providers: List[str],
         sess_options: Optional[onnxruntime.SessionOptions] = None,
-        provider_options: Optional[List[Dict[str, Any]]] = None,
+        provider_options: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> InferenceSession:
     """
     通用函数：读取 ONNX 和 FP16 权重文件，在内存中将权重转换为 FP32，
@@ -166,7 +166,13 @@ class ModelManager:
     @staticmethod
     def _build_session_create_config(runtime: RuntimeConfig) -> SessionCreateConfig:
         sess_options = onnxruntime.SessionOptions()
-        sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+        graph_optimization_level = runtime.graph_optimization_level or "ORT_ENABLE_ALL"
+        sess_options.graph_optimization_level = getattr(
+            onnxruntime.GraphOptimizationLevel,
+            graph_optimization_level,
+        )
+        if runtime.execution_mode is not None:
+            sess_options.execution_mode = getattr(onnxruntime.ExecutionMode, runtime.execution_mode)
         if runtime.intra_op_num_threads is not None:
             sess_options.intra_op_num_threads = runtime.intra_op_num_threads
         if runtime.inter_op_num_threads is not None:
