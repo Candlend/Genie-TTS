@@ -133,6 +133,8 @@ genie.load_character(
         # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
         # Apple Silicon Mac（CoreML，走 GPU / 神经引擎）：
         # "providers": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        # 注意：不推荐对 TTS 使用 CoreML。T2S 自回归解码器每句要调用 ONNX session
+        # 数百次，CoreML 每次 GPU kernel 启动开销较高，实测比 CPU 慢 4-8 倍。
     },
 )
 

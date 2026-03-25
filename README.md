@@ -138,6 +138,9 @@ genie.load_character(
         # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
         # Example for Apple Silicon Mac (CoreML — GPU / Neural Engine):
         # "providers": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        # Note: CoreML is NOT recommended for TTS — the autoregressive T2S decoder
+        # calls the ONNX session hundreds of times per sentence, and CoreML's
+        # per-call GPU kernel overhead makes it 4-8x slower than CPU for this workload.
     },
 )
 
