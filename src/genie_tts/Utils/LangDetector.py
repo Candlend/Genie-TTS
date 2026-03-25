@@ -40,6 +40,21 @@ _RE_PUNCT_ONLY = re.compile(
 )
 
 
+def _split_edge_punctuation(part: str) -> tuple[str, str, str]:
+    """Split *part* into (leading_punct, core_text, trailing_punct).
+
+    This prevents mixed chunks like 'new things。' from being misdetected as
+    Chinese just because they end with a CJK full-stop.
+    """
+    start = 0
+    end = len(part)
+    while start < end and _RE_PUNCT_ONLY.match(part[start]):
+        start += 1
+    while end > start and _RE_PUNCT_ONLY.match(part[end - 1]):
+        end -= 1
+    return part[:start], part[start:end], part[end:]
+
+
 class LangSegment(TypedDict):
     language: str
     content: str
@@ -149,15 +164,26 @@ def segment_by_language(text: str, min_len: int = _DEFAULT_MIN_SEGMENT_LEN) -> l
                 # Leading punctuation: defer — will be prepended when next segment appears
                 raw.append({"language": _FALLBACK_LANG, "content": part})
             continue
-        if len(stripped) < min_len:
+
+        leading_punct, core_part, trailing_punct = _split_edge_punctuation(part)
+        core_stripped = core_part.strip()
+        if not core_stripped:
+            if raw:
+                raw[-1]["content"] += part
+            else:
+                raw.append({"language": _FALLBACK_LANG, "content": part})
+            continue
+        if len(core_stripped) < min_len:
             # Too short to detect reliably — attach to previous if possible
             if raw:
                 raw[-1]["content"] += part
             else:
                 raw.append({"language": _FALLBACK_LANG, "content": part})
             continue
-        lang = detect_language(part)
-        raw.append({"language": lang, "content": part})
+
+        lang = detect_language(core_part)
+        content = f"{leading_punct}{core_part}{trailing_punct}"
+        raw.append({"language": lang, "content": content})
 
     if not raw:
         return [{"language": detect_language(text), "content": text}]

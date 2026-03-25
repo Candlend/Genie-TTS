@@ -159,3 +159,34 @@ class TestSegmentByLanguageMinLen:
         combined = "".join(s["content"] for s in segs)
         assert "hello" in combined
         assert "你好" in combined
+
+
+class TestSegmentByLanguageMixedChineseEnglishRegression:
+    """Regression tests for Chinese punctuation around English chunks."""
+
+    def test_english_chunk_before_cjk_period_stays_english(self):
+        """'new things。' must detect as English, not Chinese."""
+        segs = segment_by_language("我今天去了school，学了很多new things。")
+        english_contents = [s["content"] for s in segs if s["language"] == "English"]
+        assert any("school" in c for c in english_contents)
+        assert any("new things" in c for c in english_contents)
+
+    def test_mixed_sentence_splits_into_four_segments(self):
+        """Exact regression for the user's failing sentence."""
+        segs = segment_by_language("我今天去了school，学了很多new things。")
+        assert segs == [
+            {"language": "Chinese", "content": "我今天去了"},
+            {"language": "English", "content": "school，"},
+            {"language": "Chinese", "content": "学了很多"},
+            {"language": "English", "content": "new things。"},
+        ]
+
+    def test_english_with_cjk_trailing_punct_detects_english(self):
+        """Full-width Chinese punctuation at the end must not flip English detection."""
+        segs = segment_by_language("Hello。")
+        assert segs == [{"language": "English", "content": "Hello。"}]
+
+    def test_english_with_ascii_trailing_punct_detects_english(self):
+        """ASCII punctuation should also preserve English detection."""
+        segs = segment_by_language("Hello!")
+        assert segs == [{"language": "English", "content": "Hello!"}]
