@@ -130,6 +130,12 @@ genie.load_character(
         # 建议设置为物理核心数的一半到全部之间，按实际机器调整。
         "intra_op_num_threads": 4,
         "inter_op_num_threads": 1,
+        # 也可以通过环境变量设置默认值，这样代码接口可以保持不变：
+        # GENIE_ORT_PROVIDERS=CPUExecutionProvider
+        # GENIE_ORT_INTRA_OP_NUM_THREADS=4
+        # GENIE_ORT_INTER_OP_NUM_THREADS=1
+        # GENIE_ORT_EXECUTION_MODE=ORT_SEQUENTIAL
+        # 显式传入的 runtime_config 优先级高于环境变量。
         # CUDA 构建示例（Linux/Windows，需要 CUDA 版 onnxruntime）：
         # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
         # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
@@ -200,23 +206,33 @@ genie.start_server(
     workers=4,  # 基于多进程扩展的工作进程数
 )
 
-# 单进程 + 有界排队模式
+# 单进程 + 有界排队模式（workers=1 时自动启用）
 # genie.start_server(
 #     host="0.0.0.0",
 #     port=8000,
 #     workers=1,
-#     scaling_mode="single-process",
 #     max_concurrency=1,
 #     queue_maxsize=8,
 # )
 ```
 
-`start_server()` 现在支持两种部署模式：
+`start_server()` 根据 `workers` 自动选择部署模式：
 
-- `scaling_mode="process"`（默认）：使用多个 worker 进程扩展吞吐。这是更安全的方式，
-  但每个进程都会保留自己的模型缓存和参考音频缓存。
-- `scaling_mode="single-process"`：保持 `workers=1`，并启用进程内有界请求控制。
-  通过 `max_concurrency` 和 `queue_maxsize` 限制同时运行和排队的请求数量。
+- `workers > 1`（多进程）：uvicorn fork 出 N 个 worker 进程，提升并发吞吐。
+  每个进程各自持有独立的模型缓存和参考音频缓存。
+- `workers=1`（单进程）：自动启用进程内有界请求控制。
+  通过 `max_concurrency` 和 `queue_maxsize` 限制同时处理和排队的请求数。
+  超出 `queue_maxsize` 的请求返回 HTTP 429。
+
+也可以保持 Python 调用不变，通过环境变量配置默认值：
+
+```bash
+export GENIE_SERVER_WORKERS=4
+export GENIE_SERVER_MAX_CONCURRENCY=1
+export GENIE_SERVER_QUEUE_MAXSIZE=8
+```
+
+显式传入的 `start_server(...)` 参数优先级高于环境变量。
 
 > 关于请求格式和 API 详情，请参阅我们的 [API 服务教程](./Tutorial/English/API%20Server%20Tutorial.py)。
 

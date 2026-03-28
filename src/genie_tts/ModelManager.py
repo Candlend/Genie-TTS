@@ -150,17 +150,32 @@ class ModelManager:
 
     @staticmethod
     def normalize_runtime_config(runtime_config: Optional[Dict[str, Any] | RuntimeConfig]) -> RuntimeConfig:
+        env_providers = os.getenv("GENIE_ORT_PROVIDERS")
+        env_intra = os.getenv("GENIE_ORT_INTRA_OP_NUM_THREADS")
+        env_inter = os.getenv("GENIE_ORT_INTER_OP_NUM_THREADS")
+        env_execution_mode = os.getenv("GENIE_ORT_EXECUTION_MODE")
+        env_graph_opt = os.getenv("GENIE_ORT_GRAPH_OPTIMIZATION_LEVEL")
+
+        defaults = {
+            "providers": [p.strip() for p in env_providers.split(",") if p.strip()] if env_providers else ["CPUExecutionProvider"],
+            "provider_options": {},
+            "intra_op_num_threads": int(env_intra) if env_intra else None,
+            "inter_op_num_threads": int(env_inter) if env_inter else None,
+            "execution_mode": env_execution_mode,
+            "graph_optimization_level": env_graph_opt or "ORT_ENABLE_ALL",
+        }
+
         if runtime_config is None:
-            return RuntimeConfig()
+            return RuntimeConfig(**defaults)
         if isinstance(runtime_config, RuntimeConfig):
             return runtime_config
         return RuntimeConfig(
-            providers=list(runtime_config.get("providers", ["CPUExecutionProvider"])),
-            provider_options=dict(runtime_config.get("provider_options", {})),
-            intra_op_num_threads=runtime_config.get("intra_op_num_threads"),
-            inter_op_num_threads=runtime_config.get("inter_op_num_threads"),
-            execution_mode=runtime_config.get("execution_mode"),
-            graph_optimization_level=runtime_config.get("graph_optimization_level", "ORT_ENABLE_ALL"),
+            providers=list(runtime_config.get("providers", defaults["providers"])),
+            provider_options=dict(runtime_config.get("provider_options", defaults["provider_options"])),
+            intra_op_num_threads=runtime_config.get("intra_op_num_threads", defaults["intra_op_num_threads"]),
+            inter_op_num_threads=runtime_config.get("inter_op_num_threads", defaults["inter_op_num_threads"]),
+            execution_mode=runtime_config.get("execution_mode", defaults["execution_mode"]),
+            graph_optimization_level=runtime_config.get("graph_optimization_level", defaults["graph_optimization_level"]),
         )
 
     @staticmethod

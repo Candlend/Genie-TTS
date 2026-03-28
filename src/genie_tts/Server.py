@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ServerRuntimeConfig:
-    scaling_mode: str = "process"
+    single_process: bool = False
     max_concurrency: int = 1
     queue_maxsize: int = 0
     active_requests: int = 0
@@ -143,7 +143,7 @@ async def _tracked_audio_stream_generator(queue: asyncio.Queue) -> AsyncIterator
 
 
 async def _acquire_tts_slot() -> None:
-    if _server_runtime.scaling_mode != "single-process":
+    if not _server_runtime.single_process:
         return
 
     while True:
@@ -175,7 +175,7 @@ def _wait_for_tts_slot() -> None:
 
 
 def _release_tts_slot() -> None:
-    if _server_runtime.scaling_mode == "single-process":
+    if _server_runtime.single_process:
         with _server_runtime.condition:
             if _server_runtime.active_requests > 0:
                 _server_runtime.active_requests -= 1
@@ -232,17 +232,22 @@ def clear_reference_audio_cache_endpoint():
 def start_server(
         host: str = "127.0.0.1",
         port: int = 8000,
-        workers: int = 1,
-        scaling_mode: str = "process",
-        max_concurrency: int = 1,
-        queue_maxsize: int = 0,
+        workers: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        queue_maxsize: Optional[int] = None,
 ):
-    if scaling_mode == "single-process" and workers > 1:
-        raise ValueError("single-process mode requires workers=1")
-    _server_runtime.scaling_mode = scaling_mode
-    _server_runtime.max_concurrency = max_concurrency
-    _server_runtime.queue_maxsize = queue_maxsize
-    uvicorn.run(app, host=host, port=port, workers=workers)
+    effective_workers = workers if workers is not None else int(os.getenv("GENIE_SERVER_WORKERS", "1"))
+    effective_max_concurrency = (
+        max_concurrency if max_concurrency is not None else int(os.getenv("GENIE_SERVER_MAX_CONCURRENCY", "1"))
+    )
+    effective_queue_maxsize = (
+        queue_maxsize if queue_maxsize is not None else int(os.getenv("GENIE_SERVER_QUEUE_MAXSIZE", "0"))
+    )
+
+    _server_runtime.single_process = effective_workers == 1
+    _server_runtime.max_concurrency = effective_max_concurrency
+    _server_runtime.queue_maxsize = effective_queue_maxsize
+    uvicorn.run(app, host=host, port=port, workers=effective_workers)
 
 
 if __name__ == "__main__":
