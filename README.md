@@ -234,9 +234,9 @@ genie.start_server(
 You can also keep the Python call unchanged and configure defaults via environment variables:
 
 ```bash
-export GENIE_SERVER_WORKERS=4
-export GENIE_SERVER_MAX_CONCURRENCY=1
-export GENIE_SERVER_QUEUE_MAXSIZE=8
+export GENIE_WORKERS=4
+export GENIE_MAX_CONCURRENCY=1
+export GENIE_QUEUE_MAXSIZE=8
 ```
 
 Explicit `start_server(...)` arguments override environment variables.

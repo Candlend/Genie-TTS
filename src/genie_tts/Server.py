@@ -236,12 +236,12 @@ def start_server(
         max_concurrency: Optional[int] = None,
         queue_maxsize: Optional[int] = None,
 ):
-    effective_workers = workers if workers is not None else int(os.getenv("GENIE_SERVER_WORKERS", "1"))
+    effective_workers = workers if workers is not None else int(os.getenv("GENIE_WORKERS", "1"))
     effective_max_concurrency = (
-        max_concurrency if max_concurrency is not None else int(os.getenv("GENIE_SERVER_MAX_CONCURRENCY", "1"))
+        max_concurrency if max_concurrency is not None else int(os.getenv("GENIE_MAX_CONCURRENCY", "1"))
     )
     effective_queue_maxsize = (
-        queue_maxsize if queue_maxsize is not None else int(os.getenv("GENIE_SERVER_QUEUE_MAXSIZE", "0"))
+        queue_maxsize if queue_maxsize is not None else int(os.getenv("GENIE_QUEUE_MAXSIZE", "0"))
     )
 
     _server_runtime.single_process = effective_workers == 1

@@ -227,9 +227,9 @@ genie.start_server(
 也可以保持 Python 调用不变，通过环境变量配置默认值：
 
 ```bash
-export GENIE_SERVER_WORKERS=4
-export GENIE_SERVER_MAX_CONCURRENCY=1
-export GENIE_SERVER_QUEUE_MAXSIZE=8
+export GENIE_WORKERS=4
+export GENIE_MAX_CONCURRENCY=1
+export GENIE_QUEUE_MAXSIZE=8
 ```
 
 显式传入的 `start_server(...)` 参数优先级高于环境变量。

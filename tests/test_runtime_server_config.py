@@ -169,9 +169,9 @@ class TestRuntimeConfigAPI:
             captured.update(kwargs)
 
         monkeypatch.setattr(Server.uvicorn, "run", fake_run)
-        monkeypatch.setenv("GENIE_SERVER_WORKERS", "3")
-        monkeypatch.setenv("GENIE_SERVER_MAX_CONCURRENCY", "5")
-        monkeypatch.setenv("GENIE_SERVER_QUEUE_MAXSIZE", "11")
+        monkeypatch.setenv("GENIE_WORKERS", "3")
+        monkeypatch.setenv("GENIE_MAX_CONCURRENCY", "5")
+        monkeypatch.setenv("GENIE_QUEUE_MAXSIZE", "11")
 
         Server.start_server(host="127.0.0.1", port=8000)
 
@@ -210,9 +210,9 @@ class TestRuntimeConfigAPI:
             captured.update(kwargs)
 
         monkeypatch.setattr(Server.uvicorn, "run", fake_run)
-        monkeypatch.setenv("GENIE_SERVER_WORKERS", "3")
-        monkeypatch.setenv("GENIE_SERVER_MAX_CONCURRENCY", "5")
-        monkeypatch.setenv("GENIE_SERVER_QUEUE_MAXSIZE", "11")
+        monkeypatch.setenv("GENIE_WORKERS", "3")
+        monkeypatch.setenv("GENIE_MAX_CONCURRENCY", "5")
+        monkeypatch.setenv("GENIE_QUEUE_MAXSIZE", "11")
 
         Server.start_server(
             host="127.0.0.1",
