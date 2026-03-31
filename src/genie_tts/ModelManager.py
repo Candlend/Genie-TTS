@@ -1,7 +1,7 @@
 import logging
 import os
-from dataclasses import dataclass
-from typing import Optional, List, Dict
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 
 import numpy as np
 import onnx
@@ -15,8 +15,6 @@ from .Utils.Utils import LRUCacheDict
 
 onnxruntime.set_default_logger_severity(3)
 logger = logging.getLogger(__name__)
-
-
 
 
 class GSVModelFile:
@@ -42,6 +40,23 @@ class GSVModelFile:
 
 
 @dataclass
+class RuntimeConfig:
+    providers: List[str] = field(default_factory=lambda: ["CPUExecutionProvider"])
+    provider_options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    intra_op_num_threads: Optional[int] = None
+    inter_op_num_threads: Optional[int] = None
+    execution_mode: Optional[str] = None
+    graph_optimization_level: Optional[str] = "ORT_ENABLE_ALL"
+
+
+@dataclass
+class SessionCreateConfig:
+    providers: List[str]
+    provider_options: Optional[Dict[str, Dict[str, Any]]]
+    sess_options: onnxruntime.SessionOptions
+
+
+@dataclass
 class GSVModel:
     LANGUAGE: str
     T2S_ENCODER: InferenceSession
@@ -59,6 +74,7 @@ def load_session_with_fp16_conversion(
         sess_options: Optional[onnxruntime.SessionOptions] = None,
         _fp32_bytes_cache: Optional[bytes] = None,
         convert_graph: bool = False,
+        provider_options: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> InferenceSession:
     """
     通用函数：读取 ONNX 和 FP16 权重文件，在内存中将权重转换为 FP32，
@@ -118,6 +134,7 @@ def load_session_with_fp16_conversion(
         session = InferenceSession(
             model_proto.SerializeToString(),
             providers=providers,
+            provider_options=provider_options,
             sess_options=sess_options
         )
         del model_proto
@@ -135,18 +152,76 @@ class ModelManager:
         )
         self.character_to_language: Dict[str, str] = {}
         self.character_model_paths: Dict[str, str] = {}
-        available = onnxruntime.get_available_providers()
-        if "CUDAExecutionProvider" in available:
-            self.providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            logger.info("Using CUDAExecutionProvider for inference.")
-        else:
-            self.providers = ["CPUExecutionProvider"]
-            logger.info("CUDAExecutionProvider not available, falling back to CPU.")
+        self.runtime_config = self.normalize_runtime_config(None)
 
         self.cn_hubert: Optional[InferenceSession] = None
         self.speaker_verification_model: Optional[InferenceSession] = None
         self.roberta_model: Optional[InferenceSession] = None
         self.roberta_tokenizer: Optional[Tokenizer] = None
+
+    @staticmethod
+    def normalize_runtime_config(runtime_config: Optional[Dict[str, Any] | RuntimeConfig]) -> RuntimeConfig:
+        env_providers = os.getenv("GENIE_ORT_PROVIDERS")
+        env_intra = os.getenv("GENIE_ORT_INTRA_OP_NUM_THREADS")
+        env_inter = os.getenv("GENIE_ORT_INTER_OP_NUM_THREADS")
+        env_execution_mode = os.getenv("GENIE_ORT_EXECUTION_MODE")
+        env_graph_opt = os.getenv("GENIE_ORT_GRAPH_OPTIMIZATION_LEVEL")
+
+        if not env_providers:
+            available = onnxruntime.get_available_providers()
+            if "CUDAExecutionProvider" in available:
+                auto_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                logger.info("Using CUDAExecutionProvider for inference.")
+            else:
+                auto_providers = ["CPUExecutionProvider"]
+                logger.info("CUDAExecutionProvider not available, falling back to CPU.")
+        else:
+            auto_providers = [p.strip() for p in env_providers.split(",") if p.strip()]
+
+        defaults = {
+            "providers": auto_providers,
+            "provider_options": {},
+            "intra_op_num_threads": int(env_intra) if env_intra else None,
+            "inter_op_num_threads": int(env_inter) if env_inter else None,
+            "execution_mode": env_execution_mode,
+            "graph_optimization_level": env_graph_opt or "ORT_ENABLE_ALL",
+        }
+
+        if runtime_config is None:
+            return RuntimeConfig(**defaults)
+        if isinstance(runtime_config, RuntimeConfig):
+            return runtime_config
+        return RuntimeConfig(
+            providers=list(runtime_config.get("providers", defaults["providers"])),
+            provider_options=dict(runtime_config.get("provider_options", defaults["provider_options"])),
+            intra_op_num_threads=runtime_config.get("intra_op_num_threads", defaults["intra_op_num_threads"]),
+            inter_op_num_threads=runtime_config.get("inter_op_num_threads", defaults["inter_op_num_threads"]),
+            execution_mode=runtime_config.get("execution_mode", defaults["execution_mode"]),
+            graph_optimization_level=runtime_config.get("graph_optimization_level", defaults["graph_optimization_level"]),
+        )
+
+    @staticmethod
+    def _build_session_create_config(runtime: RuntimeConfig) -> SessionCreateConfig:
+        sess_options = onnxruntime.SessionOptions()
+        graph_optimization_level = runtime.graph_optimization_level or "ORT_ENABLE_ALL"
+        sess_options.graph_optimization_level = getattr(
+            onnxruntime.GraphOptimizationLevel,
+            graph_optimization_level,
+        )
+        if runtime.execution_mode is not None:
+            sess_options.execution_mode = getattr(onnxruntime.ExecutionMode, runtime.execution_mode)
+        if runtime.intra_op_num_threads is not None:
+            sess_options.intra_op_num_threads = runtime.intra_op_num_threads
+        if runtime.inter_op_num_threads is not None:
+            sess_options.inter_op_num_threads = runtime.inter_op_num_threads
+
+        provider_options = runtime.provider_options or None
+
+        return SessionCreateConfig(
+            providers=runtime.providers,
+            provider_options=provider_options,
+            sess_options=sess_options,
+        )
 
     def load_roberta_model(self, model_path: str = GSVModelFile.ROBERTA_MODEL) -> bool:
         if self.roberta_model is not None:
@@ -155,12 +230,12 @@ class ModelManager:
             # logger.warning(f'RoBERTa model does not exist: {model_path}. BERT features will not be used.')
             return False
         try:
-            _opts = onnxruntime.SessionOptions()
-            _opts.enable_cpu_mem_arena = False
+            session_config = self._build_session_create_config(self.runtime_config)
             self.roberta_model = onnxruntime.InferenceSession(
                 model_path,
-                providers=self.providers,
-                sess_options=_opts,
+                providers=session_config.providers,
+                provider_options=session_config.provider_options,
+                sess_options=session_config.sess_options,
             )
             self.roberta_tokenizer = Tokenizer.from_file(
                 os.path.join(GSVModelFile.ROBERTA_TOKENIZER, 'tokenizer.json')
@@ -178,12 +253,12 @@ class ModelManager:
         if self.speaker_verification_model is not None:
             return True
         try:
-            _opts = onnxruntime.SessionOptions()
-            _opts.enable_cpu_mem_arena = False
+            session_config = self._build_session_create_config(self.runtime_config)
             self.speaker_verification_model = onnxruntime.InferenceSession(
                 model_path,
-                providers=self.providers,
-                sess_options=_opts,
+                providers=session_config.providers,
+                provider_options=session_config.provider_options,
+                sess_options=session_config.sess_options,
             )
             logger.info(f"Successfully loaded Speaker Verification model.")
             return True
@@ -198,22 +273,23 @@ class ModelManager:
         if self.cn_hubert is not None:
             return True
         try:
+            session_config = self._build_session_create_config(self.runtime_config)
             # Hubert 也应用内存转换逻辑
-            _opts = onnxruntime.SessionOptions()
-            _opts.enable_cpu_mem_arena = False
             if model_path == GSVModelFile.HUBERT_MODEL and os.path.exists(GSVModelFile.HUBERT_MODEL_WEIGHT_FP16):
                 self.cn_hubert = load_session_with_fp16_conversion(
                     model_path,
                     GSVModelFile.HUBERT_MODEL_WEIGHT_FP16,
-                    self.providers,
-                    _opts,
+                    session_config.providers,
+                    session_config.sess_options,
                     convert_graph=True,
+                    provider_options=session_config.provider_options,
                 )
             else:
                 self.cn_hubert = onnxruntime.InferenceSession(
                     model_path,
-                    providers=self.providers,
-                    sess_options=_opts,
+                    providers=session_config.providers,
+                    provider_options=session_config.provider_options,
+                    sess_options=session_config.sess_options,
                 )
             logger.info("Successfully loaded CN_HuBERT model.")
             return True
@@ -267,11 +343,13 @@ class ModelManager:
             character_name: str,
             model_dir: str,
             language: str,
+            runtime_config: Optional[Dict[str, Any] | RuntimeConfig] = None,
     ) -> bool:
         """
         加载角色模型，如果需要，在内存中动态转换 FP16 权重。
         """
         character_name = character_name.lower()
+        runtime = self.normalize_runtime_config(runtime_config)
         if character_name in self.character_to_model:
             _ = self.character_to_model[character_name]
             return True
@@ -313,15 +391,9 @@ class ModelManager:
             del _fp16
 
         try:
+            session_config = self._build_session_create_config(runtime)
             for model_file in model_files_to_load:
                 model_path = os.path.normpath(os.path.join(model_dir, model_file))
-
-                # 设置 Session Options
-                sess_options = onnxruntime.SessionOptions()
-                sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-                sess_options.enable_cpu_mem_arena = False
-                if "CUDAExecutionProvider" in self.providers:
-                    sess_options.enable_mem_pattern = False
 
                 if os.path.exists(model_path):
                     fp16_bin_name = onnx_to_fp16_map.get(model_file)
@@ -331,11 +403,15 @@ class ModelManager:
                         # T2S 两个 decoder 共享同一个 bin，复用已展开的 fp32_bytes 避免重复读取
                         cache = _t2s_fp32_bytes_cache if fp16_bin_path == _t2s_fp16_bin_path else None
                         model_dict[model_file] = load_session_with_fp16_conversion(
-                            model_path, fp16_bin_path, self.providers, sess_options, cache,
+                            model_path, fp16_bin_path,
+                            session_config.providers,
+                            session_config.sess_options,
+                            cache,
                             convert_graph=True,
+                            provider_options=session_config.provider_options,
                         )
                     else:
-                        if "CUDAExecutionProvider" in self.providers and model_file in _GRAPH_FP16_SAFE:
+                        if "CUDAExecutionProvider" in session_config.providers and model_file in _GRAPH_FP16_SAFE:
                             _proto = onnx.load(model_path)
                             _proto = convert_float_to_float16(
                                 _proto,
@@ -344,15 +420,17 @@ class ModelManager:
                             )
                             model_dict[model_file] = onnxruntime.InferenceSession(
                                 _proto.SerializeToString(),
-                                providers=self.providers,
-                                sess_options=sess_options,
+                                providers=session_config.providers,
+                                provider_options=session_config.provider_options,
+                                sess_options=session_config.sess_options,
                             )
                             del _proto
                         else:
                             model_dict[model_file] = onnxruntime.InferenceSession(
                                 model_path,
-                                providers=self.providers,
-                                sess_options=sess_options,
+                                providers=session_config.providers,
+                                provider_options=session_config.provider_options,
+                                sess_options=session_config.sess_options,
                             )
                 elif model_file == GSVModelFile.PROMPT_ENCODER:
                     model_dict[model_file] = None
@@ -381,13 +459,11 @@ class ModelManager:
 
     def remove_all_character(self) -> None:
         self.character_to_model.clear()
-        gc.collect()
 
     def remove_character(self, character_name: str) -> None:
         character_name = character_name.lower()
         if character_name in self.character_to_model:
             del self.character_to_model[character_name]
-            gc.collect()
             logger.info(f"Character {character_name.capitalize()} removed successfully.")
 
 

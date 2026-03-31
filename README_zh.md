@@ -124,6 +124,26 @@ genie.load_character(
     character_name='<CHARACTER_NAME>',  # 替换为您的角色名称
     onnx_model_dir=r"<PATH_TO_CHARACTER_ONNX_MODEL_DIR>",  # 包含 ONNX 模型的文件夹
     language='<LANGUAGE_CODE>',  # 替换为语言代码，例如 'en', 'zh', 'jp'
+    runtime_config={
+        "providers": ["CPUExecutionProvider"],
+        # Apple Silicon 10 核实测：4 线程约有 3x 加速；超过 4 线程后调度开销反而使性能下降。
+        # 建议设置为物理核心数的一半到全部之间，按实际机器调整。
+        "intra_op_num_threads": 4,
+        "inter_op_num_threads": 1,
+        # 也可以通过环境变量设置默认值，这样代码接口可以保持不变：
+        # GENIE_ORT_PROVIDERS=CPUExecutionProvider
+        # GENIE_ORT_INTRA_OP_NUM_THREADS=4
+        # GENIE_ORT_INTER_OP_NUM_THREADS=1
+        # GENIE_ORT_EXECUTION_MODE=ORT_SEQUENTIAL
+        # 显式传入的 runtime_config 优先级高于环境变量。
+        # CUDA 构建示例（Linux/Windows，需要 CUDA 版 onnxruntime）：
+        # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
+        # Apple Silicon Mac（CoreML，走 GPU / 神经引擎）：
+        # "providers": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        # 注意：不推荐对 TTS 使用 CoreML。T2S 自回归解码器每句要调用 ONNX session
+        # 数百次，CoreML 每次 GPU kernel 启动开销较高，实测比 CPU 慢 4-8 倍。
+    },
 )
 
 # 第二步：设置参考音频（用于情感和语调克隆）
@@ -183,9 +203,36 @@ import genie_tts as genie
 genie.start_server(
     host="0.0.0.0",  # 主机地址
     port=8000,  # 端口
-    workers=1  # 工作进程数
+    workers=4,  # 基于多进程扩展的工作进程数
 )
+
+# 单进程 + 有界排队模式（workers=1 时自动启用）
+# genie.start_server(
+#     host="0.0.0.0",
+#     port=8000,
+#     workers=1,
+#     max_concurrency=1,
+#     queue_maxsize=8,
+# )
 ```
+
+`start_server()` 根据 `workers` 自动选择部署模式：
+
+- `workers > 1`（多进程）：uvicorn fork 出 N 个 worker 进程，提升并发吞吐。
+  每个进程各自持有独立的模型缓存和参考音频缓存。
+- `workers=1`（单进程）：自动启用进程内有界请求控制。
+  通过 `max_concurrency` 和 `queue_maxsize` 限制同时处理和排队的请求数。
+  超出 `queue_maxsize` 的请求返回 HTTP 429。
+
+也可以保持 Python 调用不变，通过环境变量配置默认值：
+
+```bash
+export GENIE_WORKERS=4
+export GENIE_MAX_CONCURRENCY=1
+export GENIE_QUEUE_MAXSIZE=8
+```
+
+显式传入的 `start_server(...)` 参数优先级高于环境变量。
 
 > 关于请求格式和 API 详情，请参阅我们的 [API 服务教程](./Tutorial/English/API%20Server%20Tutorial.py)。
 

@@ -129,6 +129,28 @@ genie.load_character(
     character_name='<CHARACTER_NAME>',  # Replace with your character name
     onnx_model_dir=r"<PATH_TO_CHARACTER_ONNX_MODEL_DIR>",  # Folder containing ONNX model
     language='<LANGUAGE_CODE>',  # Replace with language code, e.g., 'en', 'zh', 'jp'
+    runtime_config={
+        "providers": ["CPUExecutionProvider"],
+        # Optimal thread count on Apple Silicon (10-core): 4 threads gives ~3x speedup
+        # vs single-threaded; beyond 4 threads, scheduling overhead reduces gains.
+        # Tune this to your physical core count — typically floor(cores / 2) to cores.
+        "intra_op_num_threads": 4,
+        "inter_op_num_threads": 1,
+        # You can also set defaults via environment variables and keep your code unchanged:
+        # GENIE_ORT_PROVIDERS=CPUExecutionProvider
+        # GENIE_ORT_INTRA_OP_NUM_THREADS=4
+        # GENIE_ORT_INTER_OP_NUM_THREADS=1
+        # GENIE_ORT_EXECUTION_MODE=ORT_SEQUENTIAL
+        # Explicit runtime_config values override environment variables.
+        # Example for CUDA (Linux/Windows with CUDA-enabled onnxruntime):
+        # "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        # "provider_options": {"CUDAExecutionProvider": {"device_id": "0"}},
+        # Example for Apple Silicon Mac (CoreML — GPU / Neural Engine):
+        # "providers": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        # Note: CoreML is NOT recommended for TTS — the autoregressive T2S decoder
+        # calls the ONNX session hundreds of times per sentence, and CoreML's
+        # per-call GPU kernel overhead makes it 4-8x slower than CPU for this workload.
+    },
 )
 
 # Step 2: Set reference audio (for emotion and intonation cloning)
@@ -188,9 +210,36 @@ import genie_tts as genie
 genie.start_server(
     host="0.0.0.0",  # Host address
     port=8000,  # Port
-    workers=1  # Number of workers
+    workers=4,  # Number of workers for process-based scaling
 )
+
+# Single-process mode with bounded queueing (workers=1)
+# genie.start_server(
+#     host="0.0.0.0",
+#     port=8000,
+#     workers=1,
+#     max_concurrency=1,
+#     queue_maxsize=8,
+# )
 ```
+
+`start_server()` supports two deployment modes, selected automatically by `workers`:
+
+- `workers > 1` (multi-process): uvicorn forks N worker processes for higher throughput.
+  Each process keeps its own model and reference-audio cache.
+- `workers=1` (single-process): bounded in-process request accounting is enabled automatically.
+  Use `max_concurrency` and `queue_maxsize` to limit concurrent and queued requests.
+  Requests beyond `queue_maxsize` are rejected with HTTP 429.
+
+You can also keep the Python call unchanged and configure defaults via environment variables:
+
+```bash
+export GENIE_WORKERS=4
+export GENIE_MAX_CONCURRENCY=1
+export GENIE_QUEUE_MAXSIZE=8
+```
+
+Explicit `start_server(...)` arguments override environment variables.
 
 > For request formats and API details, see our [API Server Tutorial](./Tutorial/English/API%20Server%20Tutorial.py).
 
