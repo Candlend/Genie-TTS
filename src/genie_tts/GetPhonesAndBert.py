@@ -16,6 +16,8 @@ from .ModelManager import model_manager
 
 logger = logging.getLogger(__name__)
 
+MIN_PHONE_LEN: int = 6  # minimum phone sequence length before short-phones retry
+
 
 # ---------------------------------------------------------------------------
 # Legacy Hybrid-Chinese-English splitter (preserved for backward compatibility)
@@ -45,7 +47,7 @@ def _split_chinese_english(text: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def get_phones_and_bert(
-    prompt_text: str, language: str = "japanese"
+    prompt_text: str, language: str = "japanese", _final: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Return (phones_seq, text_bert) for *prompt_text* in *language*.
 
@@ -57,19 +59,28 @@ def get_phones_and_bert(
 
     if lang_lower == "hybrid-chinese-english":
         chunks = _split_chinese_english(prompt_text)
-        return _process_chunks(chunks)
-
-    if lang_lower == "auto":
+        phones_seq, text_bert = _process_chunks(chunks)
+    elif lang_lower == "auto":
         from .Utils.LangDetector import segment_by_language
         chunks = segment_by_language(prompt_text)
         if not chunks:
             logger.warning("LangDetector returned no segments for text %r; falling back to Japanese.", prompt_text[:60])
-            return _get_phones_and_bert_single(prompt_text, "japanese")
-        if len(chunks) == 1:
-            return _get_phones_and_bert_single(chunks[0]["content"], chunks[0]["language"])
-        return _process_chunks(chunks)
+            phones_seq, text_bert = _get_phones_and_bert_single(prompt_text, "japanese")
+        elif len(chunks) == 1:
+            phones_seq, text_bert = _get_phones_and_bert_single(chunks[0]["content"], chunks[0]["language"])
+        else:
+            phones_seq, text_bert = _process_chunks(chunks)
+    else:
+        phones_seq, text_bert = _get_phones_and_bert_single(prompt_text, language)
 
-    return _get_phones_and_bert_single(prompt_text, language)
+    if not _final and phones_seq.shape[-1] < MIN_PHONE_LEN:
+        logger.debug(
+            "Short phone sequence (%d < %d) for text %r; retrying with leading '.'.",
+            phones_seq.shape[-1], MIN_PHONE_LEN, prompt_text[:40],
+        )
+        return get_phones_and_bert("." + prompt_text, language, _final=True)
+
+    return phones_seq, text_bert
 
 
 # ---------------------------------------------------------------------------
