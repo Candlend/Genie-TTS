@@ -165,8 +165,9 @@ class ChineseG2P:
                         all_phones.extend(phone_pair)
                         all_word2ph.append(len(phone_pair))
                     except KeyError:
-                        # 遇到未知的拼音组合，记录错误或跳过
-                        continue
+                        # 遇到未知的拼音组合，替换为 UNK 并保留 word2ph 条目
+                        all_phones.append('UNK')
+                        all_word2ph.append(1)
 
         return all_phones, all_word2ph
 
@@ -174,7 +175,10 @@ class ChineseG2P:
         normalized_text = self.normalize_text(text)
         # print(normalized_text)
         phones, word2ph = self.g2p(normalized_text)
-        phones = [ph for ph in phones if ph in symbols_v2]
+        phones = [ph if ph in symbols_v2 else 'UNK' for ph in phones]
+        assert sum(word2ph) == len(phones), (
+            f"word2ph/phones mismatch: sum(word2ph)={sum(word2ph)} vs len(phones)={len(phones)}"
+        )
         phones_ids = [symbol_to_id_v2[ph] for ph in phones]
         return normalized_text, phones, phones_ids, word2ph
 
