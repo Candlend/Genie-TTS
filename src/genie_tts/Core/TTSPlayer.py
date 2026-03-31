@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 STREAM_END = 'STREAM_END'  # 这是一个特殊的标记，表示文本流结束
 AUDIO_STREAM_END = 'AUDIO_STREAM_END'  # 新增：特殊的标记，表示音频流播放结束
 
+INTER_SENTENCE_SILENCE_SAMPLES = 9600  # 0.3 s at 32 kHz，句间静音
+
 
 class TTSPlayer:
     def __init__(self, sample_rate: int = 32000):
@@ -105,6 +107,10 @@ class TTSPlayer:
                     if self._chunk_callback:
                         audio_data = self._preprocess_for_playback(audio_chunk)
                         self._chunk_callback(audio_data)
+
+                    if self._split and self._chunk_callback:
+                        silence = np.zeros(INTER_SENTENCE_SILENCE_SAMPLES, dtype=np.float32)
+                        self._chunk_callback(self._preprocess_for_playback(silence))
 
             except Exception as e:
                 logger.error(f"A critical error occurred while processing the TTS task: {e}", exc_info=True)
