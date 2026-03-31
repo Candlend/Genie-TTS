@@ -50,7 +50,7 @@ class GENIE:
             semantic_tokens = semantic_tokens[..., :first_eos_index]
 
         if prompt_encoder is None:
-            return vocoder.run(None, {
+            audio = vocoder.run(None, {
                 "text_seq": text_seq,
                 "pred_semantic": semantic_tokens,
                 "ref_audio": prompt_audio.audio_32k
@@ -58,13 +58,17 @@ class GENIE:
         else:
             # V2ProPlus 新增。
             prompt_audio.update_global_emb(prompt_encoder=prompt_encoder)
-            audio_chunk = vocoder.run(None, {
+            audio = vocoder.run(None, {
                 "text_seq": text_seq,
                 "pred_semantic": semantic_tokens,
                 "ge": prompt_audio.global_emb,
                 "ge_advanced": prompt_audio.global_emb_advanced,
             })[0]
-            return audio_chunk
+
+        max_val = np.abs(audio).max()
+        if max_val > 1.0:
+            audio = audio / max_val
+        return audio
 
     def t2s_cpu(
             self,
