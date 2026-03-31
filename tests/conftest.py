@@ -46,6 +46,13 @@ for _top in [
 ]:
     _stub(_top)
 
+# ---- onnxruntime sub-modules used by ModelManager ----
+_ort_transformers = MagicMock()
+_ort_transformers_fp16 = MagicMock()
+_ort_transformers_fp16.convert_float_to_float16 = MagicMock(side_effect=lambda m, **kw: m)
+sys.modules["onnxruntime.transformers"] = _ort_transformers
+sys.modules["onnxruntime.transformers.float16"] = _ort_transformers_fp16
+
 # ---- fastapi needs sub-module stubs for `from fastapi.responses import ...` ----
 _fastapi = _stub("fastapi")
 _fastapi_resp = MagicMock()
