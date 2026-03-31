@@ -6,7 +6,7 @@ import threading
 from ..Audio.ReferenceAudio import ReferenceAudio
 from ..GetPhonesAndBert import get_phones_and_bert
 
-MAX_T2S_LEN = 1000
+MAX_T2S_LEN = 1500
 
 
 class GENIE:
@@ -91,8 +91,8 @@ class GENIE:
 
         # Stage Decoder
         input_names: List[str] = [inp.name for inp in stage_decoder.get_inputs()]
-        idx: int = 0
-        for idx in range(0, 500):
+        idx: int = 1
+        for idx in range(1, MAX_T2S_LEN):
             if self.stop_event.is_set():
                 return None
             input_feed = {
