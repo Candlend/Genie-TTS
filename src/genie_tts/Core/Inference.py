@@ -27,7 +27,6 @@ class GENIE:
             prompt_encoder: Optional[ort.InferenceSession],
             language: str = 'japanese',
     ) -> Optional[np.ndarray]:
-        text = '。' + text  # 防止漏第一句。
         _trailing_punct = '.' if language.lower() == 'english' else '。'
         if text[-1] not in ('。', '.', '？', '！', '?', '!'):
             text += _trailing_punct
