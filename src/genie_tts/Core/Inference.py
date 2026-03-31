@@ -28,6 +28,9 @@ class GENIE:
             language: str = 'japanese',
     ) -> Optional[np.ndarray]:
         text = '。' + text  # 防止漏第一句。
+        _trailing_punct = '.' if language.lower() == 'english' else '。'
+        if text[-1] not in ('。', '.', '？', '！', '?', '!'):
+            text += _trailing_punct
         text_seq, text_bert = get_phones_and_bert(text, language=language)
 
         semantic_tokens: np.ndarray = self.t2s_cpu(
