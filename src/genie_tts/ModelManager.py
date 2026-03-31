@@ -1,10 +1,3 @@
-"""
-不再新建 .bin 文件。
-修改后内存: 6448 MB
-修改前内存: 5952 MB
-"""
-
-import gc
 import logging
 import os
 from dataclasses import dataclass
@@ -14,6 +7,7 @@ import numpy as np
 import onnx
 import onnxruntime
 from onnxruntime import InferenceSession
+from onnxruntime.transformers.float16 import convert_float_to_float16
 from tokenizers import Tokenizer
 
 from .Core.Resources import (HUBERT_MODEL_DIR, SV_MODEL, ROBERTA_MODEL_DIR)
@@ -21,6 +15,8 @@ from .Utils.Utils import LRUCacheDict
 
 onnxruntime.set_default_logger_severity(3)
 logger = logging.getLogger(__name__)
+
+
 
 
 class GSVModelFile:
@@ -60,7 +56,9 @@ def load_session_with_fp16_conversion(
         onnx_path: str,
         fp16_bin_path: str,
         providers: List[str],
-        sess_options: Optional[onnxruntime.SessionOptions] = None
+        sess_options: Optional[onnxruntime.SessionOptions] = None,
+        _fp32_bytes_cache: Optional[bytes] = None,
+        convert_graph: bool = False,
 ) -> InferenceSession:
     """
     通用函数：读取 ONNX 和 FP16 权重文件，在内存中将权重转换为 FP32，
@@ -72,9 +70,13 @@ def load_session_with_fp16_conversion(
         raise FileNotFoundError(f"FP16 Weight file not found: {fp16_bin_path}")
 
     model_proto = onnx.load(onnx_path, load_external_data=False)
-    fp16_data = np.fromfile(fp16_bin_path, dtype=np.float16)
-    fp32_data = fp16_data.astype(np.float32)
-    fp32_bytes = fp32_data.tobytes()
+    if _fp32_bytes_cache is not None:
+        fp32_bytes = _fp32_bytes_cache
+    else:
+        fp16_data = np.fromfile(fp16_bin_path, dtype=np.float16)
+        fp32_data = fp16_data.astype(np.float32)
+        fp32_bytes = fp32_data.tobytes()
+        del fp16_data, fp32_data
 
     # 遍历并修补模型中的 External Data Initializers
     for tensor in model_proto.graph.initializer:
@@ -102,12 +104,23 @@ def load_session_with_fp16_conversion(
             del tensor.external_data[:]
             tensor.data_location = onnx.TensorProto.DEFAULT
 
+    if convert_graph and "CUDAExecutionProvider" in providers:
+        model_proto = convert_float_to_float16(
+            model_proto,
+            keep_io_types=True,
+            disable_shape_infer=True,
+        )
+        # 清空中间值的静态 shape 信息，防止 ORT 按错误的静态 shape 预分配 buffer
+        # 对自回归模型（KV cache 每步增长）尤其关键
+        del model_proto.graph.value_info[:]
+
     try:
         session = InferenceSession(
             model_proto.SerializeToString(),
             providers=providers,
             sess_options=sess_options
         )
+        del model_proto
         return session
     except Exception as e:
         logger.error(f"Failed to load in-memory model {os.path.basename(onnx_path)}: {e}")
@@ -122,7 +135,13 @@ class ModelManager:
         )
         self.character_to_language: Dict[str, str] = {}
         self.character_model_paths: Dict[str, str] = {}
-        self.providers = ["CPUExecutionProvider"]
+        available = onnxruntime.get_available_providers()
+        if "CUDAExecutionProvider" in available:
+            self.providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            logger.info("Using CUDAExecutionProvider for inference.")
+        else:
+            self.providers = ["CPUExecutionProvider"]
+            logger.info("CUDAExecutionProvider not available, falling back to CPU.")
 
         self.cn_hubert: Optional[InferenceSession] = None
         self.speaker_verification_model: Optional[InferenceSession] = None
@@ -136,9 +155,12 @@ class ModelManager:
             # logger.warning(f'RoBERTa model does not exist: {model_path}. BERT features will not be used.')
             return False
         try:
+            _opts = onnxruntime.SessionOptions()
+            _opts.enable_cpu_mem_arena = False
             self.roberta_model = onnxruntime.InferenceSession(
                 model_path,
                 providers=self.providers,
+                sess_options=_opts,
             )
             self.roberta_tokenizer = Tokenizer.from_file(
                 os.path.join(GSVModelFile.ROBERTA_TOKENIZER, 'tokenizer.json')
@@ -156,9 +178,12 @@ class ModelManager:
         if self.speaker_verification_model is not None:
             return True
         try:
+            _opts = onnxruntime.SessionOptions()
+            _opts.enable_cpu_mem_arena = False
             self.speaker_verification_model = onnxruntime.InferenceSession(
                 model_path,
                 providers=self.providers,
+                sess_options=_opts,
             )
             logger.info(f"Successfully loaded Speaker Verification model.")
             return True
@@ -174,16 +199,21 @@ class ModelManager:
             return True
         try:
             # Hubert 也应用内存转换逻辑
+            _opts = onnxruntime.SessionOptions()
+            _opts.enable_cpu_mem_arena = False
             if model_path == GSVModelFile.HUBERT_MODEL and os.path.exists(GSVModelFile.HUBERT_MODEL_WEIGHT_FP16):
                 self.cn_hubert = load_session_with_fp16_conversion(
                     model_path,
                     GSVModelFile.HUBERT_MODEL_WEIGHT_FP16,
-                    self.providers
+                    self.providers,
+                    _opts,
+                    convert_graph=True,
                 )
             else:
                 self.cn_hubert = onnxruntime.InferenceSession(
                     model_path,
                     providers=self.providers,
+                    sess_options=_opts,
                 )
             logger.info("Successfully loaded CN_HuBERT model.")
             return True
@@ -200,10 +230,14 @@ class ModelManager:
         if character_name in self.character_to_model:
             model_map: dict = self.character_to_model[character_name]
             # 简化获取逻辑
-            t2s_first_stage_decoder = model_map.get(GSVModelFile.T2S_FIRST_STAGE_DECODER_FP32) or \
-                                      model_map.get(GSVModelFile.T2S_FIRST_STAGE_DECODER_FP16)
-            t2s_stage_decoder = model_map.get(GSVModelFile.T2S_STAGE_DECODER_FP32) or \
-                                model_map.get(GSVModelFile.T2S_STAGE_DECODER_FP16)
+            t2s_first_stage_decoder: InferenceSession = (
+                model_map.get(GSVModelFile.T2S_FIRST_STAGE_DECODER_FP32) or
+                model_map.get(GSVModelFile.T2S_FIRST_STAGE_DECODER_FP16)  # type: ignore[assignment]
+            )
+            t2s_stage_decoder: InferenceSession = (
+                model_map.get(GSVModelFile.T2S_STAGE_DECODER_FP32) or
+                model_map.get(GSVModelFile.T2S_STAGE_DECODER_FP16)  # type: ignore[assignment]
+            )
             prompt_encoder_path = os.path.join(self.character_model_paths[character_name], GSVModelFile.PROMPT_ENCODER)
 
             return GSVModel(
@@ -244,6 +278,14 @@ class ModelManager:
 
         model_dict: Dict[str, Optional[InferenceSession]] = {}
 
+        # 非自回归模型可以安全做图 fp16 转换（无 KV cache 动态 shape 问题）
+        # T2S encoder 没有 fp16 bin，走 else 分支；VITS/PROMPT_ENCODER 有 fp16 bin，走 load_session_with_fp16_conversion
+        _GRAPH_FP16_SAFE = {
+            GSVModelFile.T2S_ENCODER_FP32,
+            GSVModelFile.VITS_FP32,
+            GSVModelFile.PROMPT_ENCODER,
+        }
+
         # 定义 ONNX 文件到 FP16 Bin 文件的映射关系
         onnx_to_fp16_map = {
             GSVModelFile.T2S_FIRST_STAGE_DECODER_FP32: GSVModelFile.T2S_DECODER_WEIGHT_FP16,
@@ -262,6 +304,14 @@ class ModelManager:
         fp32_decoders = [GSVModelFile.T2S_FIRST_STAGE_DECODER_FP32, GSVModelFile.T2S_STAGE_DECODER_FP32]
         model_files_to_load.extend(fp32_decoders)
 
+        # 预先展开 T2S 共享 fp16 bin，两个 decoder session 复用，避免读取两次
+        _t2s_fp16_bin_path = os.path.normpath(os.path.join(model_dir, GSVModelFile.T2S_DECODER_WEIGHT_FP16))
+        _t2s_fp32_bytes_cache: Optional[bytes] = None
+        if os.path.exists(_t2s_fp16_bin_path):
+            _fp16 = np.fromfile(_t2s_fp16_bin_path, dtype=np.float16)
+            _t2s_fp32_bytes_cache = _fp16.astype(np.float32).tobytes()
+            del _fp16
+
         try:
             for model_file in model_files_to_load:
                 model_path = os.path.normpath(os.path.join(model_dir, model_file))
@@ -269,21 +319,41 @@ class ModelManager:
                 # 设置 Session Options
                 sess_options = onnxruntime.SessionOptions()
                 sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+                sess_options.enable_cpu_mem_arena = False
+                if "CUDAExecutionProvider" in self.providers:
+                    sess_options.enable_mem_pattern = False
 
                 if os.path.exists(model_path):
                     fp16_bin_name = onnx_to_fp16_map.get(model_file)
                     fp16_bin_path = os.path.join(model_dir, fp16_bin_name) if fp16_bin_name else None
 
                     if fp16_bin_path and os.path.exists(fp16_bin_path):
+                        # T2S 两个 decoder 共享同一个 bin，复用已展开的 fp32_bytes 避免重复读取
+                        cache = _t2s_fp32_bytes_cache if fp16_bin_path == _t2s_fp16_bin_path else None
                         model_dict[model_file] = load_session_with_fp16_conversion(
-                            model_path, fp16_bin_path, self.providers, sess_options
+                            model_path, fp16_bin_path, self.providers, sess_options, cache,
+                            convert_graph=True,
                         )
                     else:
-                        model_dict[model_file] = onnxruntime.InferenceSession(
-                            model_path,
-                            providers=self.providers,
-                            sess_options=sess_options,
-                        )
+                        if "CUDAExecutionProvider" in self.providers and model_file in _GRAPH_FP16_SAFE:
+                            _proto = onnx.load(model_path)
+                            _proto = convert_float_to_float16(
+                                _proto,
+                                keep_io_types=True,
+                                disable_shape_infer=True,
+                            )
+                            model_dict[model_file] = onnxruntime.InferenceSession(
+                                _proto.SerializeToString(),
+                                providers=self.providers,
+                                sess_options=sess_options,
+                            )
+                            del _proto
+                        else:
+                            model_dict[model_file] = onnxruntime.InferenceSession(
+                                model_path,
+                                providers=self.providers,
+                                sess_options=sess_options,
+                            )
                 elif model_file == GSVModelFile.PROMPT_ENCODER:
                     model_dict[model_file] = None
                 else:
