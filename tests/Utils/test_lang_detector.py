@@ -190,3 +190,47 @@ class TestSegmentByLanguageMixedChineseEnglishRegression:
         """ASCII punctuation should also preserve English detection."""
         segs = segment_by_language("Hello!")
         assert segs == [{"language": "English", "content": "Hello!"}]
+
+
+class TestSegmentByLanguageMixedChineseJapaneseRegression:
+    def test_kana_marks_japanese_segment(self):
+        segs = segment_by_language("今日は銀行です")
+        assert segs == [{"language": "Japanese", "content": "今日は銀行です"}]
+
+    def test_chinese_then_japanese_boundary_is_preserved(self):
+        segs = segment_by_language("我喜欢東京！でも今日は忙しい。")
+        assert segs == [
+            {"language": "Chinese", "content": "我喜欢東京！"},
+            {"language": "Japanese", "content": "でも今日は忙しい。"},
+        ]
+
+    def test_kana_overrides_wrong_detector_output(self):
+        with patch(
+            "genie_tts.Utils.LangDetector._detect_fn",
+            return_value={"lang": "zh", "score": 0.99},
+        ):
+            segs = segment_by_language("今日は銀行です")
+        assert segs == [{"language": "Japanese", "content": "今日は銀行です"}]
+
+    def test_short_kana_inside_chinese_sentence_does_not_flip_whole_sentence(self):
+        with patch(
+            "genie_tts.Utils.LangDetector._detect_fn",
+            return_value={"lang": "ja", "score": 0.99},
+        ):
+            segs = segment_by_language("这个也太ね了")
+        assert segs == [{"language": "Chinese", "content": "这个也太ね了"}]
+
+    def test_long_kana_then_long_chinese_splits_into_two_segments(self):
+        segs = segment_by_language("すごかった今天真的太夸张了")
+        assert segs == [
+            {"language": "Japanese", "content": "すごかった"},
+            {"language": "Chinese", "content": "今天真的太夸张了"},
+        ]
+
+    def test_chinese_then_long_kana_then_long_chinese_splits_three_ways(self):
+        segs = segment_by_language("今天真的すごかった，笑死我了")
+        assert segs == [
+            {"language": "Chinese", "content": "今天真的"},
+            {"language": "Japanese", "content": "すごかった，"},
+            {"language": "Chinese", "content": "笑死我了"},
+        ]

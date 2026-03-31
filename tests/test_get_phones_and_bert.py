@@ -67,35 +67,37 @@ class TestSingleLanguageDispatch:
 
     def test_english_dispatch(self):
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
-        with patch(_G2P_EN, return_value=[1, 2, 3]) as mock:
+        fake = (np.array([[1, 2, 3]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32))
+        with patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock:
             phones, bert = get_phones_and_bert("Hello world", language="English")
-        mock.assert_called_once_with("Hello world")
+        mock.assert_called_once_with("Hello world", "English")
         assert phones.shape == (1, 3)
         assert bert.shape == (3, 1024)
         assert np.all(bert == 0)
 
     def test_japanese_dispatch(self):
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
-        with patch(_G2P_JA, return_value=[10, 20]) as mock:
+        fake = (np.array([[10, 20]], dtype=np.int64), np.zeros((2, 1024), dtype=np.float32))
+        with patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock:
             phones, bert = get_phones_and_bert("おはよう", language="Japanese")
-        mock.assert_called_once()
+        mock.assert_called_once_with("おはよう", "Japanese")
         assert phones.shape == (1, 2)
 
     def test_korean_dispatch(self):
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
-        ko_mod = sys.modules[_G2P_KO_MOD]
-        ko_mod.korean_to_phones = MagicMock(return_value=[5, 6, 7, 8])
-        phones, bert = get_phones_and_bert("안녕하세요", language="Korean")
-        ko_mod.korean_to_phones.assert_called_once()
+        fake = (np.array([[5, 6, 7, 8]], dtype=np.int64), np.zeros((4, 1024), dtype=np.float32))
+        with patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock:
+            phones, bert = get_phones_and_bert("안녕하세요", language="Korean")
+        mock.assert_called_once_with("안녕하세요", "Korean")
         assert phones.shape == (1, 4)
 
     def test_chinese_dispatch_no_bert(self):
-        """When load_roberta_model() is False, BERT features should be all zeros."""
+        """Single-language Chinese dispatch routes through the Chinese branch."""
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
-        # chinese_to_phones returns: (text_clean, norm_text, phones_list, word2ph)
-        fake_return = ("nih", "nih_norm", [1, 2, 3], [1, 1, 1])
-        with patch(_G2P_ZH, return_value=fake_return):
+        fake = (np.array([[1, 2, 3]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32))
+        with patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock:
             phones, bert = get_phones_and_bert("你好", language="Chinese")
+        mock.assert_called_once_with("你好", "Chinese")
         assert phones.shape == (1, 3)
         assert np.all(bert == 0)
 
@@ -109,30 +111,28 @@ class TestHybridDispatch:
     def test_hybrid_splits_and_concatenates(self):
         """Hybrid mode splits on Latin chars and concatenates phone sequences."""
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
-        # chinese_to_phones returns: (text_clean, norm_text, phones_list, word2ph)
-        zh_return = ("ni", "ni_norm", [10, 11], [1, 1])
-        with (
-            patch(_G2P_ZH, return_value=zh_return),
-            patch(_G2P_EN, return_value=[20, 21, 22]),
-        ):
+        side_effect = [
+            (np.array([[10, 11]], dtype=np.int64), np.zeros((2, 1024), dtype=np.float32)),
+            (np.array([[20, 21, 22]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32)),
+        ]
+        with patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", side_effect=side_effect) as mock_single:
             phones, bert = get_phones_and_bert("你好 hello", language="Hybrid-Chinese-English")
+        assert mock_single.call_args_list == [
+            (("你好 ", "chinese"),),
+            (("hello", "english"),),
+        ]
         assert phones.ndim == 2
         assert phones.shape[0] == 1
-        # 2 Chinese + 3 English phones
         assert phones.shape[1] == 5
 
     def test_hybrid_pure_chinese(self):
-        """Pure Chinese text in hybrid mode only calls Chinese G2P."""
+        """Pure Chinese text in hybrid mode only calls Chinese routing."""
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
-        zh_return = ("ab", "ab_norm", [1, 2], [1, 1])
-        with (
-            patch(_G2P_ZH, return_value=zh_return) as mock_zh,
-            patch(_G2P_EN, return_value=[20]) as mock_en,
-        ):
+        fake = (np.array([[1, 2]], dtype=np.int64), np.zeros((2, 1024), dtype=np.float32))
+        with patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock_single:
             phones, bert = get_phones_and_bert("纯中文", language="Hybrid-Chinese-English")
-        # Chinese G2P must be called; English G2P should not (no Latin chars)
-        assert mock_zh.called
-        assert not mock_en.called
+        mock_single.assert_called_once_with("纯中文", "chinese")
+        assert phones.shape == (1, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -142,27 +142,29 @@ class TestHybridDispatch:
 class TestAutoDispatch:
 
     def test_auto_single_english_segment(self):
-        """Single English segment routes to English G2P."""
+        """Single English segment routes to English path."""
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
         segments = [{"language": "English", "content": "Hello world"}]
+        fake = (np.array([[1, 2, 3]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32))
         with (
             patch(_SEGMENT, return_value=segments),
-            patch(_G2P_EN, return_value=[1, 2, 3]) as mock_en,
+            patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock_single,
         ):
             phones, bert = get_phones_and_bert("Hello world", language="auto")
-        mock_en.assert_called_once_with("Hello world")
+        mock_single.assert_called_once_with("Hello world", "English")
         assert phones.shape == (1, 3)
 
     def test_auto_single_japanese_segment(self):
-        """Single Japanese segment routes to Japanese G2P."""
+        """Single Japanese segment routes to Japanese path."""
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
         segments = [{"language": "Japanese", "content": "おはよう"}]
+        fake = (np.array([[10, 20, 30]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32))
         with (
             patch(_SEGMENT, return_value=segments),
-            patch(_G2P_JA, return_value=[10, 20, 30]) as mock_ja,
+            patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock_single,
         ):
             phones, bert = get_phones_and_bert("おはよう", language="auto")
-        mock_ja.assert_called_once()
+        mock_single.assert_called_once_with("おはよう", "Japanese")
         assert phones.shape == (1, 3)
 
     def test_auto_multi_segment_concatenates(self):
@@ -172,25 +174,48 @@ class TestAutoDispatch:
             {"language": "Chinese", "content": "你好"},
             {"language": "English", "content": " hello"},
         ]
-        # chinese_to_phones returns: (text_clean, norm_text, phones_list, word2ph)
-        zh_return = ("ni", "ni_norm", [10, 11], [1, 1])
+        side_effect = [
+            (np.array([[10, 11]], dtype=np.int64), np.zeros((2, 1024), dtype=np.float32)),
+            (np.array([[20, 21, 22]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32)),
+        ]
         with (
             patch(_SEGMENT, return_value=segments),
-            patch(_G2P_ZH, return_value=zh_return),
-            patch(_G2P_EN, return_value=[20, 21, 22]),
+            patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", side_effect=side_effect),
         ):
             phones, bert = get_phones_and_bert("你好 hello", language="auto")
-        # 2 Chinese + 3 English phones
         assert phones.shape == (1, 5)
         assert bert.shape == (5, 1024)
 
     def test_auto_empty_segments_fallback_to_japanese(self):
-        """Empty segmentation falls back to Japanese G2P."""
+        """Empty segmentation falls back to Japanese path."""
         from genie_tts.GetPhonesAndBert import get_phones_and_bert
+        fake = (np.array([[5, 6]], dtype=np.int64), np.zeros((2, 1024), dtype=np.float32))
         with (
             patch(_SEGMENT, return_value=[]),
-            patch(_G2P_JA, return_value=[5, 6]) as mock_ja,
+            patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", return_value=fake) as mock_single,
         ):
             phones, bert = get_phones_and_bert("???", language="auto")
-        mock_ja.assert_called_once()
+        mock_single.assert_called_once_with("???", "japanese")
         assert phones.shape == (1, 2)
+
+    def test_auto_mixed_chinese_japanese_routes_each_chunk(self):
+        from genie_tts.GetPhonesAndBert import get_phones_and_bert
+        segments = [
+            {"language": "Chinese", "content": "我喜欢東京！"},
+            {"language": "Japanese", "content": "でも今日は忙しい。"},
+        ]
+        side_effect = [
+            (np.array([[10, 11]], dtype=np.int64), np.zeros((2, 1024), dtype=np.float32)),
+            (np.array([[20, 21, 22]], dtype=np.int64), np.zeros((3, 1024), dtype=np.float32)),
+        ]
+        with (
+            patch(_SEGMENT, return_value=segments),
+            patch("genie_tts.GetPhonesAndBert._get_phones_and_bert_single", side_effect=side_effect) as mock_single,
+        ):
+            phones, bert = get_phones_and_bert("我喜欢東京！でも今日は忙しい。", language="auto")
+        assert mock_single.call_args_list == [
+            (("我喜欢東京！", "Chinese"),),
+            (("でも今日は忙しい。", "Japanese"),),
+        ]
+        assert phones.shape == (1, 5)
+        assert bert.shape == (5, 1024)

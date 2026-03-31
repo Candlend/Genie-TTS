@@ -117,12 +117,138 @@ def detect_language(text: str) -> str:
         return _FALLBACK_LANG
 
 
-# Regex: split on CJK script boundaries, keeping the CJK runs as capture groups.
+# Regex: split into script runs so Han, kana, hangul, latin, punctuation can be
+# reasoned about separately instead of collapsing all CJK into one chunk.
 _RE_CJK_SPLIT = re.compile(
-    r"([\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
-    r"\uf900-\ufaff\ufe30-\ufe4f\uac00-\ud7a3"
-    r"\u3130-\u318f]+)"
+    r"([\u3040-\u30ff]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+|[\uac00-\ud7a3\u3130-\u318f]+)"
 )
+
+_RE_HIRAGANA_KATAKANA = re.compile(r"[\u3040-\u30ff]")
+_RE_HANGUL = re.compile(r"[\uac00-\ud7a3\u3130-\u318f]")
+_RE_HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_RE_LATIN = re.compile(r"[A-Za-z]")
+_RE_STRONG_BOUNDARY = re.compile(r"[。！？!?\n]")
+
+
+def _classify_script_run(part: str) -> str:
+    if _RE_HIRAGANA_KATAKANA.search(part):
+        return "kana"
+    if _RE_HANGUL.search(part):
+        return "hangul"
+    if _RE_HAN.search(part):
+        return "han"
+    if _RE_LATIN.search(part):
+        return "latin"
+    return "other"
+
+
+def _score_clause_main_context(parts: list[str]) -> tuple[int, int]:
+    runs = [part for part in parts if part and not _RE_PUNCT_ONLY.match(part)]
+    if not runs:
+        return 0, 0
+
+    scripts = [_classify_script_run(part) for part in runs]
+    zh_score = 0
+    jp_score = 0
+
+    han_runs = [part for part, script in zip(runs, scripts) if script == "han"]
+    kana_runs = [part for part, script in zip(runs, scripts) if script == "kana"]
+
+    zh_score += len(han_runs)
+    if scripts[0] == "han":
+        zh_score += 2
+    if scripts[-1] == "han":
+        zh_score += 2
+
+    if kana_runs:
+        jp_score += sum(len(run.strip()) for run in kana_runs)
+        jp_score += sum(2 for run in kana_runs if len(run.strip()) >= 2)
+        if scripts[0] == "kana":
+            jp_score += 3
+        if scripts[-1] == "kana":
+            jp_score += 2
+        if len(kana_runs) >= 2:
+            jp_score += 2
+
+    for idx in range(1, len(runs) - 1):
+        if scripts[idx - 1] == "han" and scripts[idx] == "kana" and scripts[idx + 1] == "han":
+            if len(runs[idx].strip()) == 1:
+                zh_score += 3
+            else:
+                zh_score += 2
+                jp_score += 1
+
+    for idx in range(1, len(runs) - 1):
+        if scripts[idx - 1] == "kana" and scripts[idx] == "han" and scripts[idx + 1] == "kana":
+            jp_score += 3
+
+    return zh_score, jp_score
+
+
+def _detect_clause_main_context(parts: list[str]) -> str | None:
+    zh_score, jp_score = _score_clause_main_context(parts)
+    if zh_score >= jp_score + 2:
+        return "Chinese"
+    if jp_score >= zh_score + 2:
+        return "Japanese"
+    return None
+
+
+def _build_clause_contexts(parts: list[str]) -> list[str | None]:
+    contexts: list[str | None] = [None] * len(parts)
+    start = 0
+    for idx, part in enumerate(parts):
+        if not part:
+            continue
+        if _RE_PUNCT_ONLY.match(part) and _RE_STRONG_BOUNDARY.search(part):
+            clause_parts = parts[start:idx]
+            context = _detect_clause_main_context(clause_parts)
+            for fill_idx in range(start, idx + 1):
+                contexts[fill_idx] = context
+            start = idx + 1
+    if start < len(parts):
+        context = _detect_clause_main_context(parts[start:])
+        for fill_idx in range(start, len(parts)):
+            contexts[fill_idx] = context
+    return contexts
+
+
+def _detect_segment_language(
+    core_part: str,
+    prev_language: str | None = None,
+    next_part: str | None = None,
+    prev_content: str | None = None,
+    clause_context: str | None = None,
+) -> str:
+    """Detect a segment language with script-first heuristics for mixed CJK text."""
+    if _RE_HIRAGANA_KATAKANA.search(core_part):
+        if clause_context == "Chinese" and len(core_part.strip()) < 2 and prev_language == "Chinese" and next_part and _RE_HAN.search(next_part):
+            return "Chinese"
+        return "Japanese"
+    if _RE_HANGUL.search(core_part):
+        return "Korean"
+    if _RE_LATIN.search(core_part) and not _RE_HAN.search(core_part):
+        return detect_language(core_part)
+
+    han_chars = [char for char in core_part if _RE_HAN.match(char)]
+    if han_chars and len(han_chars) == len(core_part.strip()):
+        if prev_language == "Japanese":
+            if prev_content and _RE_HIRAGANA_KATAKANA.search(prev_content):
+                prev_kana_count = len(_RE_HIRAGANA_KATAKANA.findall(prev_content))
+                if prev_kana_count >= 2 and len(han_chars) >= 3:
+                    return "Chinese"
+                return "Japanese"
+            if next_part and _RE_HIRAGANA_KATAKANA.search(next_part):
+                return "Japanese"
+        if clause_context == "Japanese":
+            return "Japanese"
+        if clause_context == "Chinese":
+            return "Chinese"
+        if prev_language == "Chinese":
+            return "Chinese"
+        return "Chinese"
+
+    return detect_language(core_part)
 
 
 def segment_by_language(text: str, min_len: int = _DEFAULT_MIN_SEGMENT_LEN) -> list[LangSegment]:
@@ -150,9 +276,10 @@ def segment_by_language(text: str, min_len: int = _DEFAULT_MIN_SEGMENT_LEN) -> l
 
     # Split into alternating CJK / non-CJK runs, keeping delimiters
     parts = _RE_CJK_SPLIT.split(text)
+    clause_contexts = _build_clause_contexts(parts)
 
     raw: list[LangSegment] = []
-    for part in parts:
+    for idx, part in enumerate(parts):
         if not part:
             continue
         stripped = part.strip()
@@ -181,7 +308,19 @@ def segment_by_language(text: str, min_len: int = _DEFAULT_MIN_SEGMENT_LEN) -> l
                 raw.append({"language": _FALLBACK_LANG, "content": part})
             continue
 
-        lang = detect_language(core_part)
+        next_nonempty_part = None
+        for future_part in parts[idx + 1:]:
+            if future_part and not _RE_PUNCT_ONLY.match(future_part):
+                next_nonempty_part = future_part
+                break
+
+        lang = _detect_segment_language(
+            core_part,
+            raw[-1]["language"] if raw else None,
+            next_nonempty_part,
+            raw[-1]["content"] if raw else None,
+            clause_contexts[idx],
+        )
         content = f"{leading_punct}{core_part}{trailing_punct}"
         raw.append({"language": lang, "content": content})
 
