@@ -119,7 +119,6 @@ class GENIE:
                 "output may be truncated."
             )
 
-        y[0, -1] = 0
         return np.expand_dims(y[:, -idx:], axis=0)
 
 
