@@ -171,10 +171,8 @@ class ModelManager:
             available = onnxruntime.get_available_providers()
             if "CUDAExecutionProvider" in available:
                 auto_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                logger.info("Using CUDAExecutionProvider for inference.")
             else:
                 auto_providers = ["CPUExecutionProvider"]
-                logger.info("CUDAExecutionProvider not available, falling back to CPU.")
         else:
             auto_providers = [p.strip() for p in env_providers.split(",") if p.strip()]
 
@@ -350,6 +348,7 @@ class ModelManager:
         """
         character_name = character_name.lower()
         runtime = self.normalize_runtime_config(runtime_config)
+        print(runtime)
         if character_name in self.character_to_model:
             _ = self.character_to_model[character_name]
             return True

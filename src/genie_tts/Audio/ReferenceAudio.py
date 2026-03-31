@@ -9,6 +9,8 @@ import numpy as np
 import soxr
 from typing import Optional, Dict
 
+SSL_TAIL_PADDING_SAMPLES: int = 4800  # 0.3 s at 16 kHz
+
 
 class ReferenceAudio:
     _prompt_cache: Dict[str, 'ReferenceAudio'] = LRUCacheDict(
@@ -48,8 +50,12 @@ class ReferenceAudio:
 
         if not model_manager.cn_hubert:
             model_manager.load_cn_hubert()
+        _padded_16k = np.concatenate(
+            [self.audio_16k, np.zeros((1, SSL_TAIL_PADDING_SAMPLES), dtype=np.float32)],
+            axis=-1
+        )
         self.ssl_content: Optional[np.ndarray] = model_manager.cn_hubert.run(
-            None, {'input_values': self.audio_16k}
+            None, {'input_values': _padded_16k}
         )[0]
 
         self.global_emb: Optional[np.ndarray] = None
