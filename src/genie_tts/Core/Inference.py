@@ -1,7 +1,10 @@
+import logging
 import onnxruntime as ort
 import numpy as np
 from typing import List, Optional
 import threading
+
+logger = logging.getLogger(__name__)
 
 from ..Audio.ReferenceAudio import ReferenceAudio
 from ..GetPhonesAndBert import get_phones_and_bert
@@ -104,6 +107,11 @@ class GENIE:
 
             if stop_condition_tensor:
                 break
+        else:
+            logger.warning(
+                f"AR loop exhausted MAX_T2S_LEN={MAX_T2S_LEN} iterations without stop token; "
+                "output may be truncated."
+            )
 
         y[0, -1] = 0
         return np.expand_dims(y[:, -idx:], axis=0)
